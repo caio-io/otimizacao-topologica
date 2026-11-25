@@ -4,3 +4,6 @@ dist
 src/*.pdf
 *.log
 src2/*.pdf
+
+# modelos/testes só para desenvolvimento interno
+*.local.*

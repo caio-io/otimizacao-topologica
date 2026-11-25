@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { LoadSpec, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
@@ -8,6 +9,9 @@ const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "modu
 
 /* ───────────────────────── estado ───────────────────────── */
 const DEFAULT_PRESET = "Viga-parede";
+/** modelos só de desenvolvimento interno: vêm de presets.local.ts (ignorado pelo git); ausente ⇒ lista pública */
+const localMods = import.meta.glob("../../../packages/core/src/presets.local.ts", { eager: true }) as Record<string, { LOCAL_SCENE_PRESETS?: Record<string, () => Scene> }>;
+const ALL_PRESETS: Record<string, () => Scene> = { ...SCENE_PRESETS, ...Object.assign({}, ...Object.values(localMods).map((mod) => mod.LOCAL_SCENE_PRESETS ?? {})) };
 /** cena salva na sessão anterior (validação mínima de forma; qualquer problema ⇒ cai no preset) */
 function loadSaved(): Scene | null {
   try {
@@ -22,7 +26,7 @@ function loadSaved(): Scene | null {
   } catch { return null; }
 }
 const saved = loadSaved();
-let scene: Scene = saved ?? SCENE_PRESETS[DEFAULT_PRESET]();
+let scene: Scene = saved ?? ALL_PRESETS[DEFAULT_PRESET]();
 type Sel = { kind: "shape" | "load" | "support"; id: string } | null;
 let sel: Sel = null;
 type Tool = "select" | "rect+" | "rect-" | "poly+" | "poly-" | "load" | "qload" | "support";
@@ -801,13 +805,13 @@ $("biela").onclick = () => {
 };
 
 const presetSel = $<HTMLSelectElement>("preset");
-for (const k of Object.keys(SCENE_PRESETS)) presetSel.add(new Option(k, k));
+for (const k of Object.keys(ALL_PRESETS)) presetSel.add(new Option(k, k));
 presetSel.add(new Option("— minha geometria —", "custom"));
 presetSel.value = saved ? "custom" : DEFAULT_PRESET;
 presetSel.onchange = () => {
   if (presetSel.value === "custom") return;
   if (geomLocked && !confirm("A geometria está travada. Carregar o exemplo substitui tudo. Continuar?")) { presetSel.value = "custom"; return; }
-  scene = SCENE_PRESETS[presetSel.value](); sel = null;
+  scene = ALL_PRESETS[presetSel.value](); sel = null;
   syncFields(); changed(); renderProps(); fitView(); draw();
 };
 function syncFields() {
