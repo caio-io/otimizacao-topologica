@@ -56,7 +56,7 @@ describe("SIMP", () => {
   }, 120_000);
 });
 
-import { buildProblem, deepBeamScene, supportReactions } from "../src";
+import { buildProblem, corbelScene, twoCorbelScene, deepBeamScene, supportReactions, beso } from "../src";
 describe("Scene", () => {
   it("viga-parede reproduz malha 120x60 e apoios/cargas", () => {
     const r = buildProblem(deepBeamScene());
@@ -137,4 +137,21 @@ describe("Coerência física", () => {
     expect(Math.abs(Mint) / M).toBeGreaterThan(0.8);
     expect(Math.abs(Mint) / M).toBeLessThan(1.2);
   }, 120_000);
+});
+
+describe("Convergência do BESO nos consolos", () => {
+  const run = (sc: any) => {
+    const p = buildProblem(sc).problem!;
+    let n = 0, last: any;
+    for (const r of beso(p, { ...BESO_DEFAULTS, volfrac: 0.35, rmin: 2.5 })) { n++; last = r; }
+    return { n, last };
+  };
+  it("pilar com 1 consolo converge antes do limite de iterações", () => {
+    const { n } = run(corbelScene());
+    expect(n).toBeLessThan(BESO_DEFAULTS.maxIter);
+  }, 300_000);
+  it("pilar com 2 consolos converge antes do limite de iterações", () => {
+    const { n } = run(twoCorbelScene());
+    expect(n).toBeLessThan(BESO_DEFAULTS.maxIter);
+  }, 300_000);
 });

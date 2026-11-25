@@ -37,9 +37,15 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
   const ue = new Float64Array(8);
   const hist: number[] = [];
   let volCur = 1;
-  let er = opt.er;
+  let er = opt.er, ar = opt.arMax;
   // último estado que gerou flexibilidade 'boa' (para voltar se a topologia desconectar)
   let xGood = x.slice(), volGood = 1, cGood = 0;
+  // melhor projeto já com o volume-alvo atingido (se a topologia piorar depois, devolvemos este)
+  let best: IterInfo | null = null;
+  const finalize = (r: IterInfo): IterInfo => {
+    if (!best || best.compliance >= r.compliance) return r;
+    return { ...best, iter: r.iter };
+  };
   let last: IterInfo = { iter: 0, compliance: 0, volume: 1, change: 1, rho: x, u, Ee };
 
   for (let iter = 1; iter <= opt.maxIter; iter++) {
@@ -59,12 +65,16 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
       alpha[e] = 0.5 * Math.pow(Math.max(x[e], XMIN), opt.penal - 1) * s;
     }
     // desconexão (carga sem caminho até o apoio) ⇒ flexibilidade explode: volta e reduz a taxa de remoção
-    if (cGood > 0 && c > 3 * cGood && er > 0.002) {
-      x.set(xGood); volCur = volGood; er = Math.max(0.002, er / 2);
+    if (cGood > 0 && c > 1.5 * cGood && (er > 0.002 || ar > 0.002)) {
+      x.set(xGood); volCur = volGood; er = Math.max(0.002, er / 2); ar = Math.max(0.002, ar / 2);
       alphaPrev.fill(0);
       continue;
     }
     xGood.set(x); volGood = volCur; cGood = c;
+    if (volCur <= opt.volfrac + 1e-9 && (!best || c < best.compliance)) {
+      let vv = 0; for (const e of active) if (x[e] === 1) vv++;
+      best = { iter, compliance: c, volume: vv / nAct, change: 0, rho: x.slice(), u: u.slice(), Ee: Ee.slice() };
+    }
     hist.push(c);
 
     // filtro espacial (média ponderada por distância)
@@ -90,7 +100,7 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
 
     // seleciona: top-nTarget por α, limitando reinserções a arMax·nAct
     const order = active.slice().sort((a, b) => alphaF[b] - alphaF[a]);
-    const maxAdd = Math.max(1, Math.round(opt.arMax * nAct));
+    const maxAdd = Math.max(1, Math.round(ar * nAct));
     const keepSolid: number[] = [], addVoid: number[] = [];
     for (let k = 0; k < order.length && k < nTarget; k++) {
       (x[order[k]] >= 1 ? keepSolid : addVoid).push(order[k]);
@@ -122,11 +132,11 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
       const n = hist.length;
       const a = hist.slice(n - 5).reduce((s, t) => s + t, 0) / 5;
       const b = hist.slice(n - 10, n - 5).reduce((s, t) => s + t, 0) / 5;
-      if (Math.abs(a - b) / a < opt.tol) return last;
+      if (Math.abs(a - b) / a < opt.tol) return finalize(last);
     }
     yield last;
   }
-  return last;
+  return finalize(last);
 }
 
 export function runBeso(p: Problem, opt: BesoOptions): IterInfo {
