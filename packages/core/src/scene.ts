@@ -18,10 +18,21 @@ export interface LoadSpec {
   /** ponto de aplicação [m] */
   x: number;
   y: number;
-  /** componentes da força [kN]; fy<0 = para baixo */
+  /** componentes da força [kN]; fy<0 = para baixo. Se houver (x1,y1), é a RESULTANTE da carga distribuída */
   fx: number;
   fy: number;
+  /** fim do trecho carregado: presente ⇒ carga distribuída uniforme entre (x,y) e (x1,y1) sobre um lado */
+  x1?: number;
+  y1?: number;
+  /** força pontual verdadeira: aplicada em UM nó (sem espalhar pela placa de aplicação) */
+  point?: boolean;
 }
+
+/** carga distribuída? (trecho com comprimento > 0) */
+export const isLineLoad = (l: LoadSpec): l is LoadSpec & { x1: number; y1: number } =>
+  l.x1 !== undefined && l.y1 !== undefined && Math.hypot(l.x1 - l.x, l.y1 - l.y) > 1e-9;
+/** intensidade média [kN/m] (resultante / comprimento) */
+export const lineLoadIntensity = (l: LoadSpec) => (isLineLoad(l) ? Math.hypot(l.fx, l.fy) / Math.hypot(l.x1 - l.x, l.y1 - l.y) : 0);
 
 export interface SupportSpec {
   id: string;
@@ -40,6 +51,8 @@ export interface Scene {
   t: number;
   E: number;
   nu: number;
+  /** resistência característica do concreto [MPa], ≥ 25 (γc = 1,4 fixo) */
+  fck?: number;
   shapes: Shape[];
   loads: LoadSpec[];
   supports: SupportSpec[];
@@ -108,6 +121,9 @@ export function sceneBounds(s: Scene): { x0: number; y0: number; x1: number; y1:
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
 
+/** limite prático do solver em banda (custo ≈ N·bw² por iteração, memória ≈ N·bw) */
+export const MAX_ELEMENTS = 20000;
+
 export interface BuildResult {
   problem: Problem | null;
   /** nós restringidos por apoio (para reações) e posição física do apoio */
@@ -135,9 +151,12 @@ export function buildProblem(s: Scene): BuildResult {
   if (!b) { errors.push("Defina ao menos uma forma de geometria."); return empty; }
   const nelx = Math.round((b.x1 - b.x0) / s.h), nely = Math.round((b.y1 - b.y0) / s.h);
   if (nelx < 4 || nely < 4) { errors.push("Geometria pequena demais para a resolução escolhida."); return empty; }
-  if (nelx * nely > 40000) { errors.push(`Malha com ${nelx * nely} elementos; aumente o tamanho do elemento (limite 40 000).`); return empty; }
+  if (nelx * nely > MAX_ELEMENTS) { errors.push(`Malha com ${nelx * nely} elementos; aumente o tamanho do elemento (limite ${MAX_ELEMENTS}).`); return empty; }
 
-  for (const l of s.loads) if (!isOnEdge(s, l.x, l.y)) errors.push(`A força ${l.id} precisa estar sobre um lado (contorno) da geometria.`);
+  for (const l of s.loads) {
+    if (!isOnEdge(s, l.x, l.y) || (isLineLoad(l) && !isOnEdge(s, l.x1, l.y1)))
+      errors.push(`A força ${l.id} precisa estar sobre um lado (contorno) da geometria.`);
+  }
   for (const sp of s.supports)
     if (!isOnEdge(s, sp.x0, sp.y0) || !isOnEdge(s, sp.x1, sp.y1)) errors.push(`O apoio ${sp.id} precisa ter início e fim sobre um lado (contorno) da geometria.`);
   if (errors.length) return { ...empty, errors, warnings };
@@ -211,9 +230,33 @@ export function buildProblem(s: Scene): BuildResult {
   const loadGroups: BuildResult["loadGroups"] = [];
   const loads: Problem["loads"] = [];
   for (const ld of s.loads) {
+    if (isLineLoad(ld)) {
+      // distribuída: nós de contorno sobre o trecho; peso por trecho tributário (pontas com metade), soma = resultante
+      const L = Math.hypot(ld.x1 - ld.x, ld.y1 - ld.y), ux = (ld.x1 - ld.x) / L, uy = (ld.y1 - ld.y) / L;
+      const on: { n: number; s: number }[] = [];
+      for (const n of solidNodes) {
+        if (!(touch[n] & 2)) continue;
+        const q = nodePos(n);
+        if (distToSegment(q.x, q.y, ld.x, ld.y, ld.x1, ld.y1) > 0.51 * s.h) continue;
+        const along = (q.x - ld.x) * ux + (q.y - ld.y) * uy;
+        if (along < -0.51 * s.h || along > L + 0.51 * s.h) continue;
+        on.push({ n, s: Math.min(L, Math.max(0, along)) });
+      }
+      if (on.length === 0) { warnings.push(`Carga distribuída ${ld.id} está fora do material e foi ignorada.`); continue; }
+      on.sort((a, b) => a.s - b.s);
+      const w = on.map((o, k) => {
+        const lo = k === 0 ? 0 : (on[k - 1].s + o.s) / 2, hi = k === on.length - 1 ? L : (o.s + on[k + 1].s) / 2;
+        return Math.max(hi - lo, 1e-9);
+      });
+      const tot = w.reduce((a, b) => a + b, 0);
+      on.forEach((o, k) => loads.push({ node: o.n, fx: (ld.fx * w[k]) / tot, fy: (ld.fy * w[k]) / tot }));
+      loadGroups.push({ id: ld.id, nodes: on.map((o) => o.n) });
+      continue;
+    }
     let nodes: number[] = [];
     const r = s.bearing / 2 + 1e-9;
-    for (const n of solidNodes) {
+    if (ld.point) { const near = nearest(ld.x, ld.y, true); if (near.n >= 0 && near.d < 3 * s.h) nodes = [near.n]; }
+    else for (const n of solidNodes) {
       if (!(touch[n] & 2)) continue;
       const q = nodePos(n);
       if (Math.hypot(q.x - ld.x, q.y - ld.y) <= r) nodes.push(n);
@@ -249,6 +292,11 @@ export function buildProblem(s: Scene): BuildResult {
   if (Math.abs(sumFx) > 1e-9 && !fixed.some((d) => d % 2 === 0)) errors.push("Há força horizontal resultante, mas nenhum apoio restringe ux.");
   if (Math.abs(sumFy) > 1e-9 && !fixed.some((d) => d % 2 === 1)) errors.push("Há força vertical resultante, mas nenhum apoio restringe uy.");
 
+  if (!errors.length) {
+    const msg = connectivityError(mask, nelx, nely, fixed, loads);
+    if (msg) errors.push(msg);
+  }
+
   if (errors.length) return { ...empty, errors, warnings };
   return {
     problem: { nelx, nely, h: s.h, t: s.t, E: s.E, nu: s.nu, mask, fixed, loads },
@@ -256,6 +304,29 @@ export function buildProblem(s: Scene): BuildResult {
     origin: { x: b.x0, y: b.y0 },
     warnings, errors,
   };
+}
+
+/**
+ * Conectividade (união de nós por elementos não vazios): todo o material precisa estar ligado a algum apoio,
+ * senão a rigidez é singular (ilha flutuante) ou a carga não tem caminho até a reação.
+ */
+export function connectivityError(
+  mask: Uint8Array, nelx: number, nely: number, fixed: number[], loads: { node: number }[],
+): string | null {
+  const nn = (nelx + 1) * (nely + 1), parent = new Int32Array(nn).map((_, i) => i);
+  const find = (a: number) => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+    if (!mask[i * nely + j]) continue;
+    const n = i * (nely + 1) + j, ns = [n, n + 1, n + nely + 1, n + nely + 2];
+    for (let k = 1; k < 4; k++) parent[find(ns[k])] = find(ns[0]);
+  }
+  const supported = new Set(fixed.map((d) => find(d >> 1)));
+  for (const l of loads) if (!supported.has(find(l.node))) return "Há força sem caminho de material até um apoio (peça desconectada dos apoios).";
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+    if (!mask[i * nely + j]) continue;
+    if (!supported.has(find(i * (nely + 1) + j))) return "Há material desconectado dos apoios (ilha flutuante); remova ou conecte essa região.";
+  }
+  return null;
 }
 
 /** Os vínculos eliminam as 3 translações/rotação de corpo rígido? (posto 3 da matriz de restrições) */

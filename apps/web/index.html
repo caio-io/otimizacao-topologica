@@ -51,11 +51,17 @@
     </label>
 
     <h2>Geometria, apoios e cargas</h2>
-    <label title="Lado de cada elemento finito da malha. Menor = mais detalhe, porém mais lento (limite de 40 000 elementos).">Tamanho do elemento (m) — resolução
+    <label title="Lado de cada elemento finito da malha. Menor = mais detalhe, porém mais lento (limite de 20 000 elementos).">Tamanho do elemento (m) — resolução
       <input id="elemSize" type="number" step="0.005" min="0.002" value="0.025" />
     </label>
     <label>Largura da placa de aplicação das forças (m) — fixa, igual para todas
       <input id="bearing" type="number" step="0.01" min="0" value="0.3" />
+    </label>
+    <label title="Espessura da peça. Entra na largura da biela (a = F / (t·σRd,max)).">Espessura t (m)
+      <input id="thick" type="number" step="0.01" min="0.05" value="0.2" />
+    </label>
+    <label title="Resistência característica do concreto, mínimo 25 MPa. γc = 1,4 fixo.">fck (MPa) — mínimo 25 · γc = 1,4
+      <input id="fck" type="number" step="1" min="25" value="30" />
     </label>
     <div id="list"></div>
     <div id="props"></div>
@@ -69,8 +75,12 @@
       <select id="method"><option value="beso" selected>BESO (padrão)</option><option value="simp">SIMP</option></select>
     </label>
     <label title="Quanto do material original deve restar. 0,35 = 35% do volume. Menor = estrutura mais esbelta (poucas bielas/tirantes); maior = mais robusta.">Fração de volume: <b id="vfv">0.35</b><input id="vf" type="range" min="0.15" max="0.7" step="0.01" value="0.35" /></label>
-    <label title="Distância (em nº de elementos) em que os elementos vizinhos se influenciam. Controla a espessura mínima das bielas e tirantes e evita padrões em xadrez. Maior = barras mais grossas e menos numerosas.">Raio do filtro (elem.): <b id="rv">2.5</b><input id="rmin" type="range" min="1.5" max="6" step="0.5" value="2.5" /></label>
-    <button id="elastic" style="margin-top:10px">Campo elástico (sem otimizar)</button>
+    <label title="Distância (em nº de elementos) em que os elementos vizinhos se influenciam. Controla a espessura mínima das bielas e tirantes e evita padrões em xadrez. Maior = barras mais grossas e menos numerosas.">Raio do filtro (elem.): <b id="rv">2.5</b><input id="rmin" type="range" min="1.5" max="12" step="0.5" value="2.5" /></label>
+    <button id="biela" title="Largura mínima da biela segundo Borges (2022): a = F/(t·σRd,max), σRd,max = (1 − fck/250)·0,85·fck/γc. Ajusta o raio do filtro para que as barras não fiquem mais estreitas que isso.">Ajustar filtro pela largura da biela</button>
+    <small id="bielaInfo" class="note"></small>
+    <button id="csfm" style="margin-top:10px" title="Ramo sem otimização: campo elástico do domínio cheio → zonas tracionadas → armadura sugerida As = T/fyd. Estimativa linear (inspirada no CSFM; sem não linearidade, sem ELS).">CSFM — armadura sugerida (campo elástico)</button>
+    <div id="csfmOut" class="note"></div>
+    <button id="elastic" style="margin-top:6px">Campo elástico (sem otimizar)</button>
     <button id="run" class="primary" style="margin-top:6px">Otimizar</button>
     <div class="grid2" style="margin-top:6px"><button id="clearRes">Limpar resultados</button><button id="clearAll">Limpar tudo</button></div>
 
@@ -78,6 +88,7 @@
     <select id="view">
       <option value="topo" selected>Topologia + trajetórias</option>
       <option value="def">Deformada (MEF)</option>
+      <option value="csfm">CSFM: zonas tracionadas</option>
       <option value="s1">Mapa σ1 (tração)</option>
       <option value="s2">Mapa σ2 (compressão)</option>
     </select>

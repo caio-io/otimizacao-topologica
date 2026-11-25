@@ -25,3 +25,16 @@ Observação do usuário: cada caso precisa de ajuste minucioso para convergir. 
 - **Fração de volume por continuação:** em vez de um valor fixo, reduzir o volume enquanto a flexibilidade não subir além de um limite (ex.: +30%) e parar no "joelho"; mostrar a curva volume × flexibilidade.
 - **Painel de convergência/caminho de carga:** para cada força, verificar por busca em largura se há caminho sólido até algum apoio; sinalizar quando a topologia desconecta (evento que já observamos nos consolos); mostrar histórico de flexibilidade e do nº de elementos trocados.
 - **Valores padrão calibrados por exemplo** (viga-parede 35–40%; consolos a calibrar) e modo "avançado" para alterar.
+
+## Decisões pendentes (nov/2026) — adotar os três caminhos até decidir
+1. **Carga distribuída** — implementada (`LoadSpec.x1,y1`; resultante em Fx/Fy; preset "Viga-parede (carga distribuída)").
+2. **Biela segundo Borges (2022)** — largura a = F/(t·σRd,max), σRd,max = k·(1−fck/250)·0,85·fck/γc (k = 1,0 · 0,85 · 0,60 conforme o nó/ref. transversal; Borges §7, eqs. 7.27–7.30); filtro em metros derivado de a. Alternativa mais ampla: BESO em 2 fases concreto+aço com critério de Ottosen (Borges cap. 8, ER 2%, fração 0,6 só do concreto). A escolher.
+3. **CSFM** como ramo sem otimização (acima).
+
+### Decisão 1 adotada (largura mínima da biela, Borges)
+γc = 1,4 fixo; fck ≥ 25 MPa (campo na interface); σRd,max = k·(1−fck/250)·0,85·fck/γc; a = F/(t·σRd,max), k = 1,0 por padrão. Raio do filtro = a/h (calibração empírica: largura mínima medida ≈ 1,1–1,3·rmin·h no BESO da viga-parede a 35%). F = maior reação de apoio (proxy da força da biela; Borges usa a força da biela do STM, maior que a reação).
+Observação aberta: com rmin grande (7,5 elem.) o BESO da viga-parede chegou a 150 iterações com volume 42,8% (> 35% alvo) — investigar.
+
+### Estado (nov/2026)
+- Carga pontual/distribuída selecionável por item; BESO com proteção de conectividade (ligação por **aresta**, material flutuante tratado como vazio, flexibilidade = ½·fᵀu).
+- CSFM linear implementado em `packages/core/src/csfm.ts` (`tensionZones`): zonas tracionadas + As = T/fyd. Próximos passos: elementos de armadura 1D, concreto sem tração com redução por deformação transversal e enrijecimento à tração (ler o livro ETH 2020), ELS (w ≤ wlim).

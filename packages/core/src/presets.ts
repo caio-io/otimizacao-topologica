@@ -4,6 +4,10 @@ import type { Scene } from "./scene";
 
 const base = (h: number, bearing: number): Scene => ({ h, bearing, t: 0.2, E: 30e6, nu: 0.2, shapes: [], loads: [], supports: [] });
 
+/** Força aplicada em placa: carga distribuída uniforme de largura `w` centrada em (cx,cy), ao longo de uma aresta horizontal. */
+const plateLoad = (id: string, cx: number, cy: number, w: number, fy: number): Scene["loads"][number] =>
+  ({ id, x: cx - w / 2, y: cy, x1: cx + w / 2, y1: cy, fx: 0, fy });
+
 /** Viga-parede biapoiada, carga no topo. L=3.0 m, H=1.5 m. Forças e apoios sobre vértices do contorno. */
 export function deepBeamScene(opening = false): Scene {
   const s = base(0.025, 0.3);
@@ -14,7 +18,7 @@ export function deepBeamScene(opening = false): Scene {
   if (opening) s.shapes.push({ id: "A1", mode: "cut", pts: rectPts(0.7, 0.6, 0.6, 0.5) });
   s.supports.push({ id: "Ap1", x0: 0, y0: 0, x1: 0.15, y1: 0, ux: true, uy: true });
   s.supports.push({ id: "Ap2", x0: 2.85, y0: 0, x1: 3, y1: 0, ux: false, uy: true });
-  s.loads.push({ id: "P1", x: 1.5, y: 1.5, fx: 0, fy: -1000 });
+  s.loads.push(plateLoad("P1", 1.5, 1.5, s.bearing, -1000));
   return s;
 }
 
@@ -26,8 +30,8 @@ export function corbelScene(): Scene {
     pts: [[0, 0], [0.28, 0], [0.28, 0.54], [0.7, 0.7], [0.7, 0.86], [0.58, 0.86], [0.28, 0.86], [0.28, 0.9], [0.14, 0.9], [0, 0.9]],
   });
   s.supports.push({ id: "Ap1", x0: 0, y0: 0, x1: 0.28, y1: 0, ux: true, uy: true });
-  s.loads.push({ id: "P1", x: 0.58, y: 0.86, fx: 0, fy: -400 });
-  s.loads.push({ id: "P2", x: 0.14, y: 0.9, fx: 0, fy: -800 });
+  s.loads.push(plateLoad("P1", 0.58, 0.86, s.bearing, -400));
+  s.loads.push(plateLoad("P2", 0.14, 0.9, s.bearing, -800));
   return s;
 }
 
@@ -42,9 +46,9 @@ export function twoCorbelScene(): Scene {
     ],
   });
   s.supports.push({ id: "Ap1", x0: 0.42, y0: 0, x1: 0.7, y1: 0, ux: true, uy: true });
-  s.loads.push({ id: "P1", x: 1.0, y: 0.86, fx: 0, fy: -400 });
-  s.loads.push({ id: "P2", x: 0.12, y: 0.86, fx: 0, fy: -400 });
-  s.loads.push({ id: "P3", x: 0.56, y: 0.9, fx: 0, fy: -800 });
+  s.loads.push(plateLoad("P1", 1.0, 0.86, s.bearing, -400));
+  s.loads.push(plateLoad("P2", 0.12, 0.86, s.bearing, -400));
+  s.loads.push(plateLoad("P3", 0.56, 0.9, s.bearing, -800));
   return s;
 }
 

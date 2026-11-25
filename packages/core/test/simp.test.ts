@@ -155,3 +155,153 @@ describe("Convergência do BESO nos consolos", () => {
     expect(n).toBeLessThan(BESO_DEFAULTS.maxIter);
   }, 300_000);
 });
+
+import { solveBanded, connectivityError, MAX_ELEMENTS } from "../src";
+describe("Solver em banda (usado em produção)", () => {
+  const cantilever = (nu: number, nelx = 40, nely = 8, h = 0.1) => {
+    const p: Problem = {
+      nelx, nely, h, t: 1, E: 1, nu, mask: new Uint8Array(nelx * nely).fill(1),
+      fixed: [], loads: [{ node: nelx * (nely + 1) + nely / 2, fx: 0, fy: -1 }],
+    };
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * j, 2 * j + 1);
+    return p;
+  };
+  it("coincide com o PCG (ν=0,3, módulos heterogêneos)", () => {
+    const p = cantilever(0.3);
+    const m = buildModel(p);
+    const Ee = new Float64Array(p.nelx * p.nely).map((_, e) => (e % 7 === 0 ? 1e-3 : 1));
+    const a = new Float64Array(m.ndof), b = new Float64Array(m.ndof);
+    solveBanded(m, p.nely, Ee, a);
+    solvePCG(m, Ee, b, 1e-13, 50000);
+    let err = 0, nrm = 0;
+    for (let d = 0; d < m.ndof; d++) { err = Math.max(err, Math.abs(a[d] - b[d])); nrm = Math.max(nrm, Math.abs(a[d])); }
+    expect(err / nrm).toBeLessThan(1e-6);
+  });
+  it("flecha da viga em balanço ≈ Timoshenko (ν=0,3)", () => {
+    const p = cantilever(0.3, 60, 10);
+    const m = buildModel(p), u = new Float64Array(m.ndof);
+    solveBanded(m, p.nely, new Float64Array(p.nelx * p.nely).fill(1), u);
+    const tip = Math.abs(u[2 * (p.nelx * (p.nely + 1) + p.nely / 2) + 1]);
+    const L = p.nelx * p.h, H = p.nely * p.h, I = H ** 3 / 12, G = 1 / (2 * 1.3);
+    const analytic = L ** 3 / (3 * I) + L / (G * (5 / 6) * H);
+    expect(tip / analytic).toBeGreaterThan(0.85);
+    expect(tip / analytic).toBeLessThan(1.15);
+  });
+});
+
+describe("Conectividade da cena", () => {
+  it("presets são conectados", () => {
+    for (const s of [deepBeamScene(), deepBeamScene(true), corbelScene(), twoCorbelScene()])
+      expect(buildProblem(s).errors).toEqual([]);
+  });
+  it("ilha flutuante de material é rejeitada", () => {
+    const s = deepBeamScene();
+    s.shapes.push({ id: "S2", mode: "add", pts: [[3.3, 0.5], [3.6, 0.5], [3.6, 0.8], [3.3, 0.8]] });
+    // a ilha estende a caixa; a carga e os apoios continuam na peça principal
+    expect(buildProblem(s).errors.join()).toMatch(/desconectado|sem caminho/);
+  });
+  it("abertura que corta a peça ao meio deixa a carga sem caminho", () => {
+    const s = deepBeamScene();
+    s.shapes.push({ id: "A9", mode: "cut", pts: [[1.2, -0.1], [1.3, -0.1], [1.3, 1.6], [1.2, 1.6]] });
+    s.shapes.push({ id: "A8", mode: "cut", pts: [[1.7, -0.1], [1.8, -0.1], [1.8, 1.6], [1.7, 1.6]] });
+    expect(buildProblem(s).errors.join()).toMatch(/desconectad|sem caminho/);
+  });
+  it("connectivityError direto: tudo ligado ⇒ null", () => {
+    expect(connectivityError(new Uint8Array(16).fill(1), 4, 4, [0, 1], [{ node: 24 }])).toBeNull();
+  });
+  it("limite de malha vigente", () => {
+    const s = deepBeamScene(); s.h = 0.005;
+    expect(buildProblem(s).errors.join()).toContain(String(MAX_ELEMENTS));
+  });
+});
+
+import { isLineLoad, lineLoadIntensity } from "../src";
+describe("Carga distribuída", () => {
+  const withQ = (x0: number, x1: number, F = -1000) => {
+    const s = deepBeamScene();
+    s.loads = [{ id: "Q1", x: x0, y: 1.5, x1, y1: 1.5, fx: 0, fy: F }];
+    return s;
+  };
+  it("a resultante é preservada e se espalha por vários nós", () => {
+    const r = buildProblem(withQ(1.0, 2.0));
+    expect(r.errors).toEqual([]);
+    const ls = r.problem!.loads;
+    expect(ls.reduce((a, l) => a + l.fy, 0)).toBeCloseTo(-1000, 6);
+    expect(ls.length).toBeGreaterThan(30);
+    expect(Math.max(...ls.map((l) => l.fy)) / Math.min(...ls.map((l) => l.fy))).toBeLessThan(1.01); // uniforme
+  });
+  it("intensidade kN/m = resultante / comprimento", () => {
+    const l = withQ(1.0, 2.0).loads[0];
+    expect(isLineLoad(l)).toBe(true);
+    expect(lineLoadIntensity(l)).toBeCloseTo(1000, 6);
+  });
+  it("extremidade fora do lado é rejeitada; reações equilibram", () => {
+    const bad = withQ(1.0, 2.0); bad.loads[0].y1 = 1.0;
+    expect(buildProblem(bad).errors.join()).toMatch(/lado/);
+    const sc = withQ(0.5, 2.5), r = buildProblem(sc), p = r.problem!;
+    const rho = new Float64Array(p.mask.length).map((_, e) => (p.mask[e] ? 1 : 0));
+    const u = solveDisplacements(p, rho, 1);
+    const Ee = rho.map((v) => 1e-6 + (1 - 1e-6) * v);
+    const { reactions, residual } = supportReactions(p, Ee, u, r.supportGroups);
+    expect(Math.abs(residual.y)).toBeLessThan(1e-3);
+    expect(reactions[0].ry + reactions[1].ry).toBeCloseTo(1000, 1);
+  }, 60_000);
+});
+
+import { sigmaRdMax, strutWidth, clampFck, GAMMA_C } from "../src";
+describe("Largura de biela (Borges 2022)", () => {
+  it("reproduz o exemplo do Borges: C35, γc 1,5 ⇒ 17,1 MPa e a = 323,6 mm", () => {
+    expect(sigmaRdMax(35, 1.0, 1.5)).toBeCloseTo(17.1, 1);
+    expect(strutWidth(2484, 0.45, 35, 1.0, 1.5) * 1000).toBeCloseTo(323.6, -0.5);
+    expect(sigmaRdMax(35, 0.6, 1.5)).toBeCloseTo(10.23, 2);
+  });
+  it("γc fixo em 1,4 e fck mínimo de 25 MPa", () => {
+    expect(GAMMA_C).toBe(1.4);
+    expect(clampFck(20)).toBe(25);
+    expect(clampFck(NaN)).toBe(25);
+    expect(sigmaRdMax(20)).toBeCloseTo(sigmaRdMax(25), 9);
+  });
+});
+
+describe("Força pontual vs distribuída", () => {
+  it("point=true usa um único nó; sem flag espalha pela placa; resultante igual", () => {
+    const a = deepBeamScene(); a.loads = [{ id: "P", x: 1.5, y: 1.5, fx: 0, fy: -1000, point: true }];
+    const b = deepBeamScene(); b.loads = [{ id: "P", x: 1.5, y: 1.5, fx: 0, fy: -1000 }];
+    const la = buildProblem(a).problem!.loads, lb = buildProblem(b).problem!.loads;
+    expect(la.length).toBe(1);
+    expect(lb.length).toBeGreaterThan(5);
+    expect(la.reduce((s, l) => s + l.fy, 0)).toBeCloseTo(-1000, 6);
+  });
+});
+
+describe("BESO: proteção de conectividade", () => {
+  it("carga distribuída longa + filtro grande: atinge o volume e a flexibilidade não explode", () => {
+    const sc = deepBeamScene(false);
+    sc.loads = [{ id: "Q1", x: 0.15, y: 1.5, x1: 2.85, y1: 1.5, fx: 0, fy: -1000 }];
+    const p = buildProblem(sc).problem!;
+    const cs: number[] = []; let n = 0, last: any;
+    for (const r of beso(p, { ...BESO_DEFAULTS, volfrac: 0.35, rmin: 7.5 })) { cs.push(r.compliance); last = r; n++; }
+    expect(last.volume).toBeLessThan(0.37);
+    // picos isolados (trecho esbelto de 1 elemento) são aceitáveis; antes eram dezenas de iterações perdidas
+    expect(cs.filter((c) => c > 5 * last.compliance).length).toBeLessThanOrEqual(3);
+    expect(n).toBeLessThanOrEqual(BESO_DEFAULTS.maxIter);
+  }, 300_000);
+});
+
+import { tensionZones } from "../src";
+describe("CSFM linear: zonas tracionadas e armadura", () => {
+  it("viga-parede: tirante principal junto à base, T da ordem de M/z, As = T/fyd", () => {
+    const sc = deepBeamScene(), r = buildProblem(sc), p = r.problem!;
+    const rho = new Float64Array(p.mask.length).map((_, e) => (p.mask[e] ? 1 : 0));
+    const f = principalStresses(p, solveDisplacements(p, rho, 1));
+    const { zones, fyd } = tensionZones({ nelx: p.nelx, nely: p.nely, h: p.h, ox: r.origin.x, oy: r.origin.y, t: p.t }, p.mask, f);
+    expect(zones.length).toBeGreaterThan(0);
+    const z = zones[0];
+    expect(z.cy).toBeLessThan(0.75); // abaixo da meia altura (H = 1,5 m)
+    expect(Math.abs(z.theta)).toBeLessThan(0.5); // tração aproximadamente horizontal
+    // M = P·L/4 ≈ 1000·2,85/4 ≈ 712 kN·m; z ≈ 0,6·H ⇒ T ≈ 800 kN (ordem de grandeza)
+    expect(z.T).toBeGreaterThan(250);
+    expect(z.T).toBeLessThan(1600);
+    expect(z.As).toBeCloseTo((z.T / fyd) * 1e4, 9);
+  }, 60_000);
+});

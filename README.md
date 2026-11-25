@@ -42,7 +42,8 @@ npm test           # testes do núcleo de cálculo
 |---|---|
 | Material | Ferramentas **Retângulo** / **Polígono** (arraste, ou clique vértices; duplo clique/Enter fecha) |
 | Abertura | **Abertura** / **Abertura poligonal**; pode haver várias |
-| Força | Ferramenta **Força** e clique sobre um **lado** da geometria (as linhas pontilhadas azuis mostram onde é possível). Edite Fx e Fy (kN) ou digite x,y (o ponto é projetado no lado mais próximo) |
+| Força pontual | Ferramenta **Força pontual**: clique num **lado**; força concentrada em **um nó** (gera pico de tensão local) |
+| Carga distribuída | Ferramenta **Carga distribuída**: clique num lado (placa da largura configurada) ou arraste ao longo dele (trecho livre). Digite a **resultante** (kN); a intensidade em kN/m aparece na tela. No painel do item dá para trocar entre *pontual* e *uniformemente distribuída* |
 | Apoio | Ferramenta **Apoio**; arraste ao longo de um lado (ou clique num ponto do lado para apoio pontual). Tipos: *fixo* (restringe ux e uy), *móvel desliza em x* (só uy), *móvel desliza em y* (só ux) |
 | Mover | **Selecionar/mover**: arraste. Forças e apoios que estão sobre os lados da geometria acompanham o movimento |
 | Excluir | Selecione e pressione **Delete** |
@@ -51,7 +52,7 @@ npm test           # testes do núcleo de cálculo
 | Limpar | **Limpar resultados** apaga só os resultados; **Limpar tudo** apaga também geometria, apoios e forças |
 
 Regras: **forças e apoios só podem ficar sobre os lados (contorno) da geometria** (grip obrigatório; ao longo do lado o ponto encaixa no tamanho do elemento); a **largura da placa de
-aplicação** é única para todas as forças; é preciso ao menos 3 vínculos que impeçam o corpo rígido, ao menos uma força e
+aplicação** é única para todas as forças de placa; é preciso ao menos 3 vínculos que impeçam o corpo rígido, ao menos uma força e
 um apoio em cada direção da resultante — o programa avisa o que falta antes de calcular.
 
 ### Parâmetros (passe o mouse sobre cada um para ver a dica)
@@ -59,7 +60,15 @@ um apoio em cada direção da resultante — o programa avisa o que falta antes 
 - **Método** — BESO (padrão): remove/devolve elementos; resultado preto-e-branco, parecido com uma treliça. SIMP: densidades contínuas, mais suave.
 - **Fração de volume** — quanto do material original deve restar (0,35 = 35%).
 - **Raio do filtro** — distância, em elementos, em que vizinhos se influenciam; define a espessura mínima das barras e evita o padrão em xadrez.
-- **Tamanho do elemento** — lado do elemento finito (resolução da malha). Menor = mais detalhe e mais lento (limite de 40 000 elementos).
+- **Tamanho do elemento** — lado do elemento finito (resolução da malha). Menor = mais detalhe e mais lento (limite de 20 000 elementos).
+
+## CSFM (primeira versão, linear)
+
+O botão **CSFM — armadura sugerida (campo elástico)** não usa otimização: calcula o campo elástico do domínio cheio, marca as **zonas tracionadas** (σ1 acima de 5% da tração máxima), estima a força do tirante de cada zona (resultante em cortes perpendiculares à tração) e sugere **As = T/fyd** (fyk 500 MPa, γs 1,15). É uma estimativa: **não** é a verificação CSFM completa (sem não linearidade, sem redução da resistência por deformação transversal, sem ELS/fissuração).
+
+## Largura mínima da biela
+
+Campos **fck** (≥ 25 MPa; γc = 1,4 fixo) e **espessura**; o botão *Ajustar filtro pela largura da biela* usa a = F/(t·σRd,max) de Borges (2022) para sugerir o raio do filtro.
 
 ## Estrutura
 

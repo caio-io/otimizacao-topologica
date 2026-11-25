@@ -1,4 +1,4 @@
-import { SCENE_PRESETS, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { LoadSpec, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -8,24 +8,44 @@ const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "modu
 
 /* ───────────────────────── estado ───────────────────────── */
 const DEFAULT_PRESET = "Viga-parede";
-let scene: Scene = SCENE_PRESETS[DEFAULT_PRESET]();
+/** cena salva na sessão anterior (validação mínima de forma; qualquer problema ⇒ cai no preset) */
+function loadSaved(): Scene | null {
+  try {
+    const o = JSON.parse(localStorage.getItem("stm-scene") ?? "null");
+    const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+    const okPt = (p: unknown) => Array.isArray(p) && p.length === 2 && p.every(num);
+    if (!o || !num(o.h) || o.h <= 0 || !num(o.bearing) || !num(o.t) || !num(o.E) || !num(o.nu)) return null;
+    if (!Array.isArray(o.shapes) || !o.shapes.every((q: any) => typeof q.id === "string" && (q.mode === "add" || q.mode === "cut") && Array.isArray(q.pts) && q.pts.every(okPt))) return null;
+    if (!Array.isArray(o.loads) || !o.loads.every((l: any) => typeof l.id === "string" && [l.x, l.y, l.fx, l.fy].every(num))) return null;
+    if (!Array.isArray(o.supports) || !o.supports.every((s: any) => typeof s.id === "string" && [s.x0, s.y0, s.x1, s.y1].every(num) && typeof s.ux === "boolean" && typeof s.uy === "boolean")) return null;
+    return o as Scene;
+  } catch { return null; }
+}
+const saved = loadSaved();
+let scene: Scene = saved ?? SCENE_PRESETS[DEFAULT_PRESET]();
 type Sel = { kind: "shape" | "load" | "support"; id: string } | null;
 let sel: Sel = null;
-type Tool = "select" | "rect+" | "rect-" | "poly+" | "poly-" | "load" | "support";
+type Tool = "select" | "rect+" | "rect-" | "poly+" | "poly-" | "load" | "qload" | "support";
 let tool: Tool = "select";
 let geomLocked = localStorage.getItem("stm-lock") === "1";
 let nextId = 100;
+if (saved) for (const q of [...saved.shapes, ...saved.loads, ...saved.supports]) nextId = Math.max(nextId, (parseInt(q.id.replace(/\D/g, ""), 10) || 0) + 1);
 const newId = (p: string) => `${p}${nextId++}`;
 
+/** execução vigente; mensagens de outras execuções (cena editada, nova rodada) são descartadas */
+let curToken = 0;
 interface Reaction { id: string; rx: number; ry: number; x: number; y: number }
 interface Msg {
-  kind: "frame";
+  kind: "frame"; token: number;
   dims: { nelx: number; nely: number; h: number; ox: number; oy: number };
   mask: Uint8Array; iter: number; compliance: number; volume: number; change: number;
   rho: Float64Array; u: Float64Array; field: PrincipalField; done: boolean; warnings: string[]; elastic?: boolean;
   reactions: Reaction[]; residual: { x: number; y: number };
 }
 const frames: Msg[] = [];
+type CsfmData = ReturnType<typeof tensionZones>;
+const csfmData = new WeakMap<Msg, CsfmData>();
+let pendingCsfm = false;
 const slider = $<HTMLInputElement>("frame");
 
 const view = { s: 100, ox: 0, oy: 0 };
@@ -58,6 +78,13 @@ const diverge = (v: number) => {
   const t = Math.max(-1, Math.min(1, v)), a = Math.abs(t);
   return `rgb(${t > 0 ? 255 : Math.round(255 * (1 - a))},${Math.round(255 * (1 - a * 0.85))},${t < 0 ? 255 : Math.round(255 * (1 - a))})`;
 };
+/** percentis custam uma ordenação: guarda por quadro, pois o desenho roda a cada movimento do mouse */
+const pctCache = new WeakMap<object, Map<string, number>>();
+const cachedPct = (m: Msg, key: string, f: () => number) => {
+  let c = pctCache.get(m); if (!c) pctCache.set(m, (c = new Map()));
+  let v = c.get(key); if (v === undefined) c.set(key, (v = f()));
+  return v;
+};
 const pct = (a: Float64Array, idx: number[], q: number) => {
   const v = idx.map((i) => a[i]).sort((x, y) => x - y);
   return v.length ? v[Math.min(v.length - 1, Math.floor(q * v.length))] : 0;
@@ -89,6 +116,31 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
   const solidIdx: number[] = [];
   for (let e = 0; e < m.mask.length; e++) if (solidAt(m, e)) solidIdx.push(e);
 
+  if (mode === "csfm") {
+    const cz = csfmData.get(m);
+    for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+      const e = i * nely + j;
+      if (m.mask[e] === 0) continue;
+      ctx.fillStyle = "#e6eaf0"; ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
+    }
+    if (!cz) { ctx.fillStyle = "#1c2430"; ctx.font = "13px system-ui"; ctx.fillText("Clique em “CSFM — armadura sugerida” para calcular.", 20, 24); return; }
+    for (const z of cz.zones) {
+      for (const e of z.elements) {
+        const i = Math.floor(e / nely), j = e % nely, a = Math.min(1, m.field.s1[e] / (cz.smax || 1));
+        ctx.fillStyle = `rgba(192,57,43,${0.25 + 0.6 * a})`; ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
+      }
+    }
+    ctx.font = "bold 12px system-ui";
+    for (const z of cz.zones) {
+      const x = wx(z.cx), y = wy(z.cy), tx = Math.cos(z.theta) * 40, ty = -Math.sin(z.theta) * 40;
+      ctx.strokeStyle = "#7b1e12"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(x - tx, y - ty); ctx.lineTo(x + tx, y + ty); ctx.stroke();
+      ctx.fillStyle = "#1c2430";
+      ctx.fillText(`Z${z.id + 1}: T≈${z.T.toFixed(0)} kN · As≈${z.As.toFixed(1)} cm²`, x - 60, y - 10);
+    }
+    return;
+  }
+
   if (mode === "topo") {
     for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
       const e = i * nely + j;
@@ -106,7 +158,7 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
   const def = mode === "def";
   const sv = mode === "s1" ? m.field.s1 : m.field.s2;
   // escala robusta: percentil 97 (um pico no apoio não pode apagar o resto)
-  const smax = Math.max(1e-12, Math.abs(pct(Float64Array.from(sv, Math.abs), solidIdx, 0.97)));
+  const smax = Math.max(1e-12, cachedPct(m, `abs-${mode}`, () => Math.abs(pct(Float64Array.from(sv, Math.abs), solidIdx, 0.97))));
   const P = (i: number, j: number): [number, number] => {
     const n = i * (nely + 1) + j;
     const dx = def ? (m.u[2 * n] * amp) / h : 0, dy = def ? (m.u[2 * n + 1] * amp) / h : 0;
@@ -131,7 +183,7 @@ function drawTrajectories(m: Msg, X: (i: number) => number, Y: (j: number) => nu
   const { s1, s2, theta } = m.field;
   // tração e compressão com escalas SEPARADAS e robustas (percentil 95) — antes, o pico de compressão
   // sob a carga/apoio zerava visualmente a tração.
-  const tmax = Math.max(1e-12, pct(s1, solidIdx, 0.95)), cmax = Math.max(1e-12, -pct(s2, solidIdx, 0.05));
+  const tmax = Math.max(1e-12, cachedPct(m, "t", () => pct(s1, solidIdx, 0.95))), cmax = Math.max(1e-12, cachedPct(m, "c", () => -pct(s2, solidIdx, 0.05)));
   const step = Math.max(1, Math.round(9 / px));
   const half = Math.max(4, px * step * 0.8);
   ctx.lineWidth = 1.4;
@@ -159,7 +211,26 @@ function arrowHead(x: number, y: number, ang: number, sz = 12) {
   ctx.closePath(); ctx.fill();
 }
 
+function drawLineLoad(l: LoadSpec & { x1: number; y1: number }) {
+  const F = Math.hypot(l.fx, l.fy) || 1, ux = l.fx / F, uy = l.fy / F;
+  const x0 = wx(l.x), y0 = wy(l.y), x1 = wx(l.x1), y1 = wy(l.y1), len = Math.hypot(x1 - x0, y1 - y0), A = 38;
+  const selected = sel?.id === l.id;
+  ctx.strokeStyle = selected ? "#1f5fbf" : "#d35400"; ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = selected ? 3 : 2;
+  const n = Math.max(2, Math.round(len / 26));
+  const ox = -ux * A, oy = uy * A; // origem das setas: contra o sentido da força
+  ctx.beginPath(); ctx.moveTo(x0 + ox, y0 + oy); ctx.lineTo(x1 + ox, y1 + oy); ctx.stroke();
+  for (let k = 0; k <= n; k++) {
+    const bx = x0 + ((x1 - x0) * k) / n, by = y0 + ((y1 - y0) * k) / n;
+    ctx.beginPath(); ctx.moveTo(bx + ox, by + oy); ctx.lineTo(bx, by); ctx.stroke();
+    arrowHead(bx, by, Math.atan2(-oy, -ox), 9);
+  }
+  ctx.font = "12px system-ui"; ctx.fillStyle = "#1c2430";
+  ctx.fillText(`${l.id}: ${lineLoadIntensity(l).toFixed(1)} kN/m (Σ ${l.fx ? `Fx=${l.fx} ` : ""}${l.fy ? `Fy=${l.fy} ` : ""}kN)`, (x0 + x1) / 2 - 60, (y0 + y1) / 2 + oy - 8);
+}
+
 function drawLoad(l: LoadSpec) {
+  if (isLineLoad(l)) { drawLineLoad(l); return; }
   const F = Math.hypot(l.fx, l.fy);
   const ux = F ? l.fx / F : 0, uy = F ? l.fy / F : -1;
   const x = wx(l.x), y = wy(l.y), L = 56;
@@ -233,7 +304,7 @@ function draw() {
   if (frame) drawReactions(frame);
 
   // grips nos LADOS (contorno): realça os lados e marca o ponto de encaixe sob o cursor
-  if (tool === "load" || tool === "support" || drag?.type === "moveLoad") {
+  if (tool === "load" || tool === "qload" || tool === "support" || drag?.type === "moveLoad") {
     ctx.strokeStyle = "rgba(31,95,191,.55)"; ctx.lineWidth = 3; ctx.setLineDash([2, 4]);
     for (const [x0, y0, x1, y1] of sceneEdges(scene)) { ctx.beginPath(); ctx.moveTo(wx(x0), wy(y0)); ctx.lineTo(wx(x1), wy(y1)); ctx.stroke(); }
     ctx.setLineDash([]);
@@ -245,7 +316,7 @@ function draw() {
     const [a, b] = [drag.start, drag.cur];
     ctx.strokeRect(wx(Math.min(a[0], b[0])), wy(Math.max(a[1], b[1])), Math.abs(b[0] - a[0]) * view.s, Math.abs(b[1] - a[1]) * view.s);
   }
-  if (drag && tool === "support") { ctx.beginPath(); ctx.moveTo(wx(drag.start[0]), wy(drag.start[1])); ctx.lineTo(wx(drag.cur[0]), wy(drag.cur[1])); ctx.stroke(); }
+  if (drag && (tool === "support" || tool === "qload")) { ctx.beginPath(); ctx.moveTo(wx(drag.start[0]), wy(drag.start[1])); ctx.lineTo(wx(drag.cur[0]), wy(drag.cur[1])); ctx.stroke(); }
   if (polyDraft.length) {
     ctx.beginPath(); polyDraft.forEach(([x, y], i) => (i ? ctx.lineTo(wx(x), wy(y)) : ctx.moveTo(wx(x), wy(y)))); ctx.lineTo(wx(hover[0]), wy(hover[1])); ctx.stroke();
   }
@@ -257,7 +328,7 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 const snap = (v: number) => r4(Math.round(v / scene.h) * scene.h);
 
 function changed(clearResults = true) {
-  if (clearResults) { frames.length = 0; slider.max = "0"; $("stats").textContent = ""; renderReactions(); }
+  if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
   $("msg").innerHTML = "";
   localStorage.setItem("stm-scene", JSON.stringify(scene));
   renderList(); draw();
@@ -284,6 +355,19 @@ function edgeGrip(px: number, py: number, maxPx = 20, only?: number): { x: numbe
   const t = L ? Math.min(1, d / L) : 0;
   return { x: r4(e[0] + t * (e[2] - e[0])), y: r4(e[1] + t * (e[3] - e[1])), edge: q.edge };
 }
+/**
+ * Trecho de carga (placa de largura `bearing`) centrado em (cx,cy) sobre o lado `edge`, cortado nas pontas do lado.
+ * Devolve null se `bearing` = 0 (carga pontual).
+ */
+function plateOnEdge(edge: number, cx: number, cy: number): { x: number; y: number; x1: number; y1: number } | null {
+  const e = sceneEdges(scene)[edge];
+  if (!e || !(scene.bearing > 0)) return null;
+  const L = Math.hypot(e[2] - e[0], e[3] - e[1]); if (!L) return null;
+  const ux = (e[2] - e[0]) / L, uy = (e[3] - e[1]) / L, d = (cx - e[0]) * ux + (cy - e[1]) * uy, hw = scene.bearing / 2;
+  const lo = Math.max(0, d - hw), hi = Math.min(L, d + hw);
+  if (hi - lo < 1e-6) return null;
+  return { x: r4(e[0] + lo * ux), y: r4(e[1] + lo * uy), x1: r4(e[0] + hi * ux), y1: r4(e[1] + hi * uy) };
+}
 /** projeta (x,y) sobre o lado mais próximo (para valores digitados) */
 function projectToEdge(x: number, y: number): [number, number] {
   const q = nearestEdgePoint(scene, x, y);
@@ -296,6 +380,7 @@ function onPoly(pts: [number, number][], x: number, y: number) {
 
 function hit(px: number, py: number): Sel {
   for (const l of scene.loads) {
+    if (isLineLoad(l)) { if (distSeg(px, py, wx(l.x), wy(l.y), wx(l.x1), wy(l.y1)) < 40) return { kind: "load", id: l.id }; continue; }
     const F = Math.hypot(l.fx, l.fy) || 1, ux = l.fx / F, uy = l.fy / F, x = wx(l.x), y = wy(l.y);
     if (distSeg(px, py, x, y, x - ux * 56, y + uy * 56) < 10) return { kind: "load", id: l.id };
   }
@@ -310,11 +395,15 @@ const shapeLocked = (id: string) => geomLocked && scene.shapes.find((q) => q.id 
 const same = (a: [number, number], b: [number, number]) => Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(b[1] - a[1]) < 1e-6;
 /** depois de alterar a geometria, recoloca forças/apoios no lado mais próximo */
 function reproject() {
-  for (const l of scene.loads) { const p = projectToEdge(l.x, l.y); l.x = p[0]; l.y = p[1]; }
+  for (const l of scene.loads) {
+    const p = projectToEdge(l.x, l.y); l.x = p[0]; l.y = p[1];
+    if (l.x1 !== undefined && l.y1 !== undefined) { const q = projectToEdge(l.x1, l.y1); l.x1 = q[0]; l.y1 = q[1]; }
+  }
   for (const s2 of scene.supports) { const a = projectToEdge(s2.x0, s2.y0), b = projectToEdge(s2.x1, s2.y1); s2.x0 = a[0]; s2.y0 = a[1]; s2.x1 = b[0]; s2.y1 = b[1]; }
 }
+const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const toast = (msg: string) => { $("msg").innerHTML = `<div class="warn">${msg}</div>`; setTimeout(() => { if ($("msg").textContent === msg) $("msg").innerHTML = ""; }, 3500); };
-const clearFrames = () => { if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
+const clearFrames = () => { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("csfmOut").innerHTML = ""; if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
 
 let panning: null | { x: number; y: number } = null;
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -332,10 +421,10 @@ cv.addEventListener("mousedown", (ev) => {
       const o = sh.pts.map((q) => [...q] as [number, number]);
       drag = { type: "moveShape", start: [wxm, wym], cur: [wxm, wym], orig: { pts: o, loads: scene.loads.map((l) => ({ ...l })), sups: scene.supports.map((s) => ({ ...s })) } };
     } else if (sel && sel.kind === "shape") toast("Geometria principal travada — só aberturas, forças e apoios podem ser movidos.");
-  } else if (tool === "load" || tool === "support") {
+  } else if (tool === "load" || tool === "qload" || tool === "support") {
     const g = edgeGrip(px, py, 28);
     if (!g) { toast("Clique sobre um lado (contorno) da geometria — as linhas pontilhadas azuis."); return; }
-    if (tool === "support") drag = { type: "support", start: [g.x, g.y], cur: [g.x, g.y] };
+    if (tool === "support" || tool === "qload") drag = { type: "support", start: [g.x, g.y], cur: [g.x, g.y] };
   } else if (geomLocked && (tool === "rect+" || tool === "poly+")) toast("Geometria principal travada.");
   else if (tool === "poly+" || tool === "poly-") polyDraft.push(p);
   else drag = { type: tool, start: p, cur: p };
@@ -346,12 +435,16 @@ cv.addEventListener("mousemove", (ev) => {
   if (panning) { view.ox += px - panning.x; view.oy += py - panning.y; panning = { x: px, y: py }; draw(); return; }
   const [wxm, wym] = toWorld(px, py);
   hover = [snap(wxm), snap(wym)];
-  const gr = tool === "load" || tool === "support" || drag?.type === "moveLoad" ? edgeGrip(px, py, 40) : null;
+  const gr = tool === "load" || tool === "qload" || tool === "support" || drag?.type === "moveLoad" ? edgeGrip(px, py, 40) : null;
   hoverGrip = gr ? [gr.x, gr.y] : null;
   if (drag) {
     if (drag.type === "moveLoad" && sel) {
       const v = edgeGrip(px, py, 60);
-      if (v) { const l = scene.loads.find((q) => q.id === sel!.id)!; l.x = v.x; l.y = v.y; clearFrames(); }
+      if (v) {
+        const l = scene.loads.find((q) => q.id === sel!.id)!, pl = isLineLoad(l) ? plateOnEdge(v.edge, v.x, v.y) : null;
+        if (pl) Object.assign(l, pl); else { l.x = v.x; l.y = v.y; delete l.x1; delete l.y1; }
+        clearFrames();
+      }
     } else if (drag.type === "moveShape" && sel) {
       clearFrames();
       const dx = snap(wxm - drag.start[0]), dy = snap(wym - drag.start[1]);
@@ -359,7 +452,11 @@ cv.addEventListener("mousemove", (ev) => {
       const sh = scene.shapes.find((q) => q.id === sel!.id)!;
       sh.pts = o.pts.map((q: number[]) => [r4(q[0] + dx), r4(q[1] + dy)]);
       // forças/apoios que estão sobre os lados desta forma acompanham
-      scene.loads.forEach((l, i) => { if (onPoly(o.pts, o.loads[i].x, o.loads[i].y)) { l.x = r4(o.loads[i].x + dx); l.y = r4(o.loads[i].y + dy); } });
+      scene.loads.forEach((l, i) => {
+        const O = o.loads[i];
+        if (onPoly(o.pts, O.x, O.y)) { l.x = r4(O.x + dx); l.y = r4(O.y + dy); }
+        if (O.x1 !== undefined && onPoly(o.pts, O.x1, O.y1)) { l.x1 = r4(O.x1 + dx); l.y1 = r4(O.y1 + dy); }
+      });
       scene.supports.forEach((s, i) => {
         const O = o.sups[i];
         if (onPoly(o.pts, O.x0, O.y0)) { s.x0 = r4(O.x0 + dx); s.y0 = r4(O.y0 + dy); }
@@ -392,6 +489,15 @@ window.addEventListener("mouseup", () => {
       const s: Shape = { id: newId(tool === "rect+" ? "S" : "A"), mode: tool === "rect+" ? "add" : "cut", pts: rectPts(Math.min(a[0], b[0]), Math.min(a[1], b[1]), w, h) };
       scene.shapes.push(s); sel = { kind: "shape", id: s.id }; setTool("select");
     }
+  } else if (tool === "qload") {
+    let seg: { x: number; y: number; x1: number; y1: number } | null = { x: a[0], y: a[1], x1: b[0], y1: b[1] };
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < scene.h) { // clique simples: placa da largura configurada
+      const q = nearestEdgePoint(scene, a[0], a[1]);
+      seg = q ? plateOnEdge(q.edge, a[0], a[1]) : null;
+    }
+    if (!seg) { toast("Arraste ao longo de um lado (ou clique, com largura de placa > 0) para criar a carga distribuída."); drag = null; return; }
+    const l: LoadSpec = { id: newId("Q"), ...seg, fx: 0, fy: -100 };
+    scene.loads.push(l); sel = { kind: "load", id: l.id }; setTool("select"); changed(); renderProps(); focusForceField(); return;
   } else if (tool === "support") {
     const kind = $<HTMLSelectElement>("supKind").value as SupportKind;
     const s: SupportSpec = { id: newId("Ap"), x0: a[0], y0: a[1], x1: b[0], y1: b[1], ...supportFlags(kind) };
@@ -403,7 +509,9 @@ cv.addEventListener("click", (ev) => {
   if (tool === "load" && ev.button === 0) {
     const [px, py] = evPos(ev), v = edgeGrip(px, py, 28);
     if (!v) return;
-    const l: LoadSpec = { id: newId("P"), x: v.x, y: v.y, fx: 0, fy: -100 };
+    const pl = plateOnEdge(v.edge, v.x, v.y);
+    void pl; // a ferramenta "Força pontual" sempre cria uma força concentrada em um nó
+    const l: LoadSpec = { id: newId("P"), x: v.x, y: v.y, fx: 0, fy: -100, point: true };
     scene.loads.push(l); sel = { kind: "load", id: l.id }; setTool("select"); changed(); renderProps(); focusForceField();
   }
 });
@@ -443,7 +551,7 @@ cv.addEventListener("wheel", (ev) => {
 /* ───────────────────────── barra de ferramentas ───────────────────────── */
 const TOOLS: [Tool, string, boolean][] = [
   ["select", "Selecionar/mover", false], ["rect+", "▭ Retângulo", true], ["rect-", "▭ Abertura", false],
-  ["poly+", "⬠ Polígono", true], ["poly-", "⬠ Abertura poligonal", false], ["load", "↓ Força", false], ["support", "△ Apoio", false],
+  ["poly+", "⬠ Polígono", true], ["poly-", "⬠ Abertura poligonal", false], ["load", "↓ Força pontual", false], ["qload", "⇊ Carga distribuída", false], ["support", "△ Apoio", false],
 ];
 const tb = $("toolbar");
 for (const [t, label, geo] of TOOLS) {
@@ -465,7 +573,8 @@ const HINTS: Record<Tool, string> = {
   select: "Clique para selecionar; arraste para mover; duplo clique numa força para editar o valor. Botão direito: panorâmica. Roda: zoom.",
   "rect+": "Arraste para desenhar um retângulo de material.", "rect-": "Arraste para desenhar uma abertura.",
   "poly+": "Clique os vértices; duplo clique ou Enter fecha.", "poly-": "Clique os vértices da abertura; duplo clique ou Enter fecha.",
-  load: "Clique sobre um LADO da geometria (linha pontilhada azul) para aplicar a força.", support: "Arraste ao longo de um lado para definir o apoio (ou clique num ponto do lado p/ apoio pontual).",
+  qload: "Clique num LADO (placa da largura configurada) ou arraste ao longo dele (trecho livre); depois digite a resultante (kN) — a intensidade em kN/m aparece na tela.",
+  load: "Clique sobre um LADO da geometria (linha pontilhada azul) para aplicar uma força concentrada em um ponto. Arraste para mover.", support: "Arraste ao longo de um lado para definir o apoio (ou clique num ponto do lado p/ apoio pontual).",
 };
 function setTool(t: Tool) {
   tool = t; polyDraft = []; hoverGrip = null;
@@ -482,9 +591,11 @@ function renderList() {
     const d = document.createElement("div"); d.className = "item" + (sel?.id === id ? " sel" : ""); d.innerHTML = text;
     d.onclick = () => { sel = { kind, id }; renderList(); renderProps(); draw(); }; el.appendChild(d);
   };
-  for (const s of scene.shapes) row("shape", s.id, `<b>${s.id}</b> ${s.mode === "add" ? "material" : "abertura"} <small>${s.pts.length} vértices</small>`);
-  for (const s of scene.supports) { const k = supportKind(s); row("support", s.id, `<b>${s.id}</b> apoio <small>${k === "fixo" ? "fixo" : k === "movel-x" ? "móvel (desliza em x)" : "móvel (desliza em y)"}</small>`); }
-  for (const l of scene.loads) row("load", l.id, `<b>${l.id}</b> força <small>Fx=${l.fx} Fy=${l.fy} kN</small>`);
+  for (const s of scene.shapes) row("shape", s.id, `<b>${esc(s.id)}</b> ${s.mode === "add" ? "material" : "abertura"} <small>${s.pts.length} vértices</small>`);
+  for (const s of scene.supports) { const k = supportKind(s); row("support", s.id, `<b>${esc(s.id)}</b> apoio <small>${k === "fixo" ? "fixo" : k === "movel-x" ? "móvel (desliza em x)" : "móvel (desliza em y)"}</small>`); }
+  for (const l of scene.loads) row("load", l.id, isLineLoad(l)
+    ? `<b>${esc(l.id)}</b> carga distribuída <small>${lineLoadIntensity(l).toFixed(1)} kN/m · Σ Fx=${l.fx} Fy=${l.fy} kN</small>`
+    : `<b>${esc(l.id)}</b> força <small>Fx=${l.fx} Fy=${l.fy} kN</small>`);
 }
 
 function num(label: string, val: number, on: (v: number) => void, step = 0.01, disabled = false, key = "") {
@@ -529,9 +640,33 @@ function renderProps() {
   const g = document.createElement("div"); g.className = "grid2";
   if (sel.kind === "load") {
     const l = scene.loads.find((q) => q.id === sel!.id); if (!l) return;
-    g.append(...pointFields("Posição", () => [l.x, l.y], (x, y) => { l.x = x; l.y = y; }), num("Fx — horizontal (kN), + para a direita", l.fx, (v2) => (l.fx = v2), 10, false, "fx"), num("Fy — vertical (kN), − para baixo", l.fy, (v2) => (l.fy = v2), 10, false, "fy"));
+    const line = isLineLoad(l);
+    const tl = document.createElement("label"); tl.textContent = "Tipo de carga"; tl.style.gridColumn = "1 / 3";
+    const ts = document.createElement("select");
+    ts.add(new Option("Pontual (concentrada em um nó)", "point")); ts.add(new Option("Uniformemente distribuída (kN/m)", "line"));
+    ts.value = line ? "line" : "point";
+    ts.onchange = () => {
+      if (ts.value === "line" && !line) {
+        const q = nearestEdgePoint(scene, l.x, l.y), pl = q ? plateOnEdge(q.edge, l.x, l.y) : null;
+        if (!pl) { toast("Defina a largura da placa (> 0) para distribuir a carga."); ts.value = "point"; return; }
+        Object.assign(l, pl); delete l.point;
+      } else if (ts.value === "point" && line) {
+        const mx = r4((l.x + l.x1!) / 2), my = r4((l.y + l.y1!) / 2);
+        const ll: LoadSpec = l; ll.x = mx; ll.y = my; delete ll.x1; delete ll.y1; ll.point = true;
+      }
+      changed(); renderProps();
+    };
+    tl.appendChild(ts); g.append(tl);
+    const pf = line
+      ? [...pointFields("Início", () => [l.x, l.y], (x, y) => { l.x = x; l.y = y; }), ...pointFields("Fim", () => [l.x1!, l.y1!], (x, y) => { l.x1 = x; l.y1 = y; })]
+      : pointFields("Posição", () => [l.x, l.y], (x, y) => { l.x = x; l.y = y; });
+    const tot = line ? " — RESULTANTE" : "";
+    g.append(...pf, num(`Fx — horizontal (kN)${tot}, + para a direita`, l.fx, (v2) => (l.fx = v2), 10, false, "fx"), num(`Fy — vertical (kN)${tot}, − para baixo`, l.fy, (v2) => (l.fy = v2), 10, false, "fy"));
     const info = document.createElement("small"); info.className = "note"; info.style.gridColumn = "1 / 3";
-    info.textContent = `Digite x,y: o ponto é projetado no lado mais próximo. Placa de aplicação fixa: ${scene.bearing} m.`; g.append(info);
+    info.textContent = line
+      ? `Carga distribuída uniforme: ${lineLoadIntensity(l).toFixed(1)} kN/m sobre ${Math.hypot(l.x1! - l.x, l.y1! - l.y).toFixed(3)} m (a resultante é o que você digita).`
+      : `Força concentrada em um nó. Digite x,y: o ponto é projetado no lado mais próximo. (Atenção: força pontual gera pico de tensão no nó; use carga distribuída para representar uma placa.)`;
+    g.append(info);
   } else if (sel.kind === "support") {
     const s = scene.supports.find((q) => q.id === sel!.id); if (!s) return;
     const tl = document.createElement("label"); tl.textContent = "Tipo de apoio"; tl.style.gridColumn = "1 / 3";
@@ -564,18 +699,39 @@ function renderReactions() {
   if (!m) { el.innerHTML = ""; return; }
   const sum = m.reactions.reduce((a, r) => ({ x: a.x + r.rx, y: a.y + r.ry }), { x: 0, y: 0 });
   el.innerHTML = `<h2>Reações de apoio</h2>` +
-    m.reactions.map((r) => `<div class="item"><b>${r.id}</b> <small>Rx=${r.rx.toFixed(1)} · Ry=${r.ry.toFixed(1)} kN</small></div>`).join("") +
+    m.reactions.map((r) => `<div class="item"><b>${esc(r.id)}</b> <small>Rx=${r.rx.toFixed(1)} · Ry=${r.ry.toFixed(1)} kN</small></div>`).join("") +
     `<div class="item"><small>ΣR = (${sum.x.toFixed(1)}; ${sum.y.toFixed(1)}) · resíduo de equilíbrio (${m.residual.x.toFixed(3)}; ${m.residual.y.toFixed(3)}) kN</small></div>`;
 }
+function renderCsfm(m: Msg) {
+  const cz = csfmData.get(m), el = $("csfmOut");
+  if (!cz) { el.innerHTML = ""; return; }
+  const tot = cz.zones.reduce((a, z) => a + z.As, 0);
+  el.innerHTML = cz.zones.length
+    ? `<b>Zonas tracionadas</b> (σ1 &gt; ${CSFM_DEFAULTS.threshold * 100}% da tração máx. ≈ ${(cz.smax / 1000).toFixed(2)} MPa) · fyd = ${(cz.fyd / 1000).toFixed(0)} MPa<br>` +
+      cz.zones.map((z) => `Z${z.id + 1}: T ≈ ${z.T.toFixed(0)} kN, As ≈ ${z.As.toFixed(1)} cm², direção ${((z.theta * 180) / Math.PI).toFixed(0)}°`).join("<br>") +
+      `<br>ΣAs ≈ ${tot.toFixed(1)} cm² · <i>estimativa linear — não é a verificação CSFM completa (sem não linearidade/ELS)</i>`
+    : "Nenhuma zona tracionada relevante.";
+}
+$("csfm").onclick = () => { pendingCsfm = true; frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; send({ mode: "elastic", scene }); };
 /* ───────────────────────── execução ───────────────────────── */
+/** nova execução: invalida o que ainda chega da anterior */
+const send = (msg: object) => { curToken++; worker.postMessage({ ...msg, token: curToken }); };
 const showMsg = (errors: string[], warnings: string[]) => {
-  $("msg").innerHTML = errors.map((e) => `<div class="err">${e}</div>`).join("") + warnings.map((e) => `<div class="warn">${e}</div>`).join("");
+  $("msg").innerHTML = errors.map((e) => `<div class="err">${esc(e)}</div>`).join("") + warnings.map((e) => `<div class="warn">${esc(e)}</div>`).join("");
 };
-worker.onmessage = (ev: MessageEvent<Msg | { kind: "error"; errors: string[]; warnings: string[] }>) => {
+worker.onmessage = (ev: MessageEvent<Msg | { kind: "error"; token: number; errors: string[]; warnings: string[] }>) => {
   const m = ev.data;
+  if (m.token !== curToken) return;
   if (m.kind === "error") { showMsg(m.errors, m.warnings); $("run").textContent = "Otimizar"; return; }
   if (m.warnings?.length) showMsg([], m.warnings);
   frames.push(m);
+  if (m.elastic && pendingCsfm) {
+    pendingCsfm = false;
+    const cz = tensionZones({ ...m.dims, t: scene.t }, m.mask, m.field, { ...CSFM_DEFAULTS });
+    csfmData.set(m, cz);
+    $<HTMLSelectElement>("view").value = "csfm";
+    renderCsfm(m);
+  }
   slider.max = String(frames.length - 1);
   if (!m.done || frames.length === 1 || +slider.value >= frames.length - 2) slider.value = String(frames.length - 1);
   renderStats(); renderReactions(); draw();
@@ -592,9 +748,9 @@ $("run").onclick = () => {
   if ($("run").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
   frames.length = 0; slider.max = "0"; $("msg").innerHTML = "";
   $("run").textContent = "Parar";
-  worker.postMessage({ mode: "opt", ...runPayload() });
+  send({ mode: "opt", ...runPayload() });
 };
-$("elastic").onclick = () => { frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; worker.postMessage({ mode: "elastic", scene }); };
+$("elastic").onclick = () => { frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; send({ mode: "elastic", scene }); };
 $("clearRes").onclick = () => { clearFrames(); $("stats").textContent = ""; $("msg").innerHTML = ""; draw(); };
 $("clearAll").onclick = () => {
   if (!confirm(geomLocked ? "Limpar aberturas, apoios, forças e resultados (a geometria principal travada é mantida)?" : "Limpar tudo (geometria, apoios, forças e resultados)?")) return;
@@ -607,12 +763,47 @@ slider.oninput = () => { renderStats(); renderReactions(); draw(); };
 $("view").onchange = draw;
 $("showMesh").onchange = draw;
 $<HTMLInputElement>("elemSize").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { scene.h = v; changed(); } };
-$<HTMLInputElement>("bearing").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v >= 0) { scene.bearing = v; changed(); renderProps(); } };
+$<HTMLInputElement>("bearing").onchange = (e) => {
+  const v = +(e.target as HTMLInputElement).value;
+  if (v < 0) return;
+  scene.bearing = v;
+  // todas as forças de placa passam à nova largura, centradas onde estavam
+  for (const l of scene.loads) {
+    if (l.point) continue; // força pontual não depende da placa
+    const mx = isLineLoad(l) ? (l.x + l.x1) / 2 : l.x, my = isLineLoad(l) ? (l.y + l.y1) / 2 : l.y;
+    const q = nearestEdgePoint(scene, mx, my); if (!q) continue;
+    const pl = plateOnEdge(q.edge, mx, my);
+    if (pl) Object.assign(l, pl); else { l.x = r4(mx); l.y = r4(my); delete l.x1; delete l.y1; }
+  }
+  changed(); renderProps();
+};
+
+$<HTMLInputElement>("fck").onchange = (e) => {
+  const el = e.target as HTMLInputElement, v = clampFck(+el.value);
+  if (+el.value < FCK_MIN) toast(`fck mínimo: ${FCK_MIN} MPa.`);
+  el.value = String(v); scene.fck = v; changed(false);
+};
+$<HTMLInputElement>("thick").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { scene.t = v; changed(); } };
+/** largura mínima da biela (Borges 2022) → raio do filtro */
+$("biela").onclick = () => {
+  const fck = clampFck(scene.fck ?? 30), m = frames[+slider.value];
+  let F: number, origem: string;
+  if (m && m.reactions.length) { F = Math.max(...m.reactions.map((r) => Math.hypot(r.rx, r.ry))); origem = "maior reação de apoio"; }
+  else {
+    const tot = scene.loads.reduce((a, l) => a + Math.hypot(l.fx, l.fy), 0);
+    F = tot / Math.max(1, scene.supports.length); origem = "carga total ÷ nº de apoios (estimativa; rode o campo elástico para usar a reação)";
+  }
+  if (!(F > 0)) { toast("Adicione ao menos uma força."); return; }
+  const sig = sigmaRdMax(fck, K_STRUT.biela), a = strutWidth(F, scene.t, fck, K_STRUT.biela);
+  const r = Math.min(12, Math.max(1.5, Math.ceil(filterRadiusForWidth(a, scene.h) * 2) / 2));
+  $<HTMLInputElement>("rmin").value = String(r); $("rv").textContent = String(r);
+  $("bielaInfo").textContent = `F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa (fck ${fck}, γc ${GAMMA_C}, k = 1,0) · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
+};
 
 const presetSel = $<HTMLSelectElement>("preset");
 for (const k of Object.keys(SCENE_PRESETS)) presetSel.add(new Option(k, k));
 presetSel.add(new Option("— minha geometria —", "custom"));
-presetSel.value = DEFAULT_PRESET;
+presetSel.value = saved ? "custom" : DEFAULT_PRESET;
 presetSel.onchange = () => {
   if (presetSel.value === "custom") return;
   if (geomLocked && !confirm("A geometria está travada. Carregar o exemplo substitui tudo. Continuar?")) { presetSel.value = "custom"; return; }
@@ -620,6 +811,8 @@ presetSel.onchange = () => {
   syncFields(); changed(); renderProps(); fitView(); draw();
 };
 function syncFields() {
+  $<HTMLInputElement>("fck").value = String(clampFck(scene.fck ?? 30));
+  $<HTMLInputElement>("thick").value = String(scene.t);
   $<HTMLInputElement>("elemSize").value = String(scene.h);
   $<HTMLInputElement>("bearing").value = String(scene.bearing);
 }

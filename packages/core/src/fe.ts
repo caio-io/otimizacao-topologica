@@ -199,8 +199,9 @@ export function supportReactions(
   Ee: Float64Array,
   u: Float64Array,
   groups: { id: string; nodes: number[]; x: number; y: number }[],
+  model?: FEModel,
 ): { reactions: Reaction[]; residual: { x: number; y: number } } {
-  const m = buildModel(p);
+  const m = model ?? buildModel(p);
   const y = new Float64Array(m.ndof);
   for (let e = 0; e < m.nel; e++) {
     const b = e * 8;
