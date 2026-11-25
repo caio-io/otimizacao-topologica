@@ -404,7 +404,7 @@ cv.addEventListener("click", (ev) => {
     const [px, py] = evPos(ev), v = edgeGrip(px, py, 28);
     if (!v) return;
     const l: LoadSpec = { id: newId("P"), x: v.x, y: v.y, fx: 0, fy: -100 };
-    scene.loads.push(l); sel = { kind: "load", id: l.id }; setTool("select"); changed(); renderProps();
+    scene.loads.push(l); sel = { kind: "load", id: l.id }; setTool("select"); changed(); renderProps(); focusForceField();
   }
 });
 function finishPoly() {
@@ -415,7 +415,10 @@ function finishPoly() {
   }
   polyDraft = []; draw();
 }
-cv.addEventListener("dblclick", () => { if (tool.startsWith("poly")) { polyDraft.pop(); finishPoly(); } });
+cv.addEventListener("dblclick", (ev) => {
+  if (tool.startsWith("poly")) { polyDraft.pop(); finishPoly(); return; }
+  if (tool === "select") { const [px, py] = evPos(ev); const h2 = hit(px, py); if (h2?.kind === "load") { sel = h2; renderList(); renderProps(); focusForceField(); } }
+});
 window.addEventListener("keydown", (ev) => {
   const tag = (ev.target as HTMLElement).tagName;
   if (tag === "INPUT" || tag === "SELECT") return;
@@ -459,7 +462,7 @@ function updateLock() {
 const fitBtn = document.createElement("button"); fitBtn.textContent = "Ajustar vista"; fitBtn.onclick = () => { fitView(); draw(); }; tb.appendChild(fitBtn);
 const hintEl = document.createElement("small"); hintEl.style.color = "#6b7686"; tb.appendChild(hintEl);
 const HINTS: Record<Tool, string> = {
-  select: "Clique para selecionar; arraste para mover. Botão direito: panorâmica. Roda: zoom.",
+  select: "Clique para selecionar; arraste para mover; duplo clique numa força para editar o valor. Botão direito: panorâmica. Roda: zoom.",
   "rect+": "Arraste para desenhar um retângulo de material.", "rect-": "Arraste para desenhar uma abertura.",
   "poly+": "Clique os vértices; duplo clique ou Enter fecha.", "poly-": "Clique os vértices da abertura; duplo clique ou Enter fecha.",
   load: "Clique sobre um LADO da geometria (linha pontilhada azul) para aplicar a força.", support: "Arraste ao longo de um lado para definir o apoio (ou clique num ponto do lado p/ apoio pontual).",
@@ -484,9 +487,9 @@ function renderList() {
   for (const l of scene.loads) row("load", l.id, `<b>${l.id}</b> força <small>Fx=${l.fx} Fy=${l.fy} kN</small>`);
 }
 
-function num(label: string, val: number, on: (v: number) => void, step = 0.01, disabled = false) {
+function num(label: string, val: number, on: (v: number) => void, step = 0.01, disabled = false, key = "") {
   const l = document.createElement("label"); l.textContent = label;
-  const i = document.createElement("input"); i.type = "number"; i.step = String(step); i.value = String(val); i.disabled = disabled;
+  const i = document.createElement("input"); i.type = "number"; i.step = String(step); i.value = String(val); i.disabled = disabled; if (key) i.dataset.key = key;
   i.oninput = () => { if (i.value !== "") { on(+i.value); changed(); } };
   l.appendChild(i); return l;
 }
@@ -510,13 +513,23 @@ function pointFields(label: string, get: () => [number, number], set: (x: number
   return [mk(0), mk(1)];
 }
 
+/** leva o usuário ao campo do valor da força (Fy) */
+function focusForceField() {
+  const el = document.querySelector<HTMLInputElement>('#props input[data-key="fy"]');
+  if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); el.focus(); el.select(); }
+}
+
 function renderProps() {
   const el = $("props"); el.innerHTML = "";
   if (!sel) return;
+  const head = document.createElement("h2");
+  head.textContent = `Item selecionado: ${sel.id} (${sel.kind === "load" ? "força — digite o valor abaixo" : sel.kind === "support" ? "apoio" : "forma"})`;
+  head.style.color = "#1f5fbf";
+  el.appendChild(head);
   const g = document.createElement("div"); g.className = "grid2";
   if (sel.kind === "load") {
     const l = scene.loads.find((q) => q.id === sel!.id); if (!l) return;
-    g.append(...pointFields("Posição", () => [l.x, l.y], (x, y) => { l.x = x; l.y = y; }), num("Fx (kN, →)", l.fx, (v2) => (l.fx = v2), 10), num("Fy (kN, ↑)", l.fy, (v2) => (l.fy = v2), 10));
+    g.append(...pointFields("Posição", () => [l.x, l.y], (x, y) => { l.x = x; l.y = y; }), num("Fx — horizontal (kN), + para a direita", l.fx, (v2) => (l.fx = v2), 10, false, "fx"), num("Fy — vertical (kN), − para baixo", l.fy, (v2) => (l.fy = v2), 10, false, "fy"));
     const info = document.createElement("small"); info.className = "note"; info.style.gridColumn = "1 / 3";
     info.textContent = `Digite x,y: o ponto é projetado no lado mais próximo. Placa de aplicação fixa: ${scene.bearing} m.`; g.append(info);
   } else if (sel.kind === "support") {

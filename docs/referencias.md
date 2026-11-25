@@ -35,3 +35,25 @@ Uso: comparar a força/armadura do STM extraído com a carga de ruptura medida (
 - **Bruggi (2009)**, "Generating strut-and-tie patterns for reinforced concrete structures using topology optimization", *Computers & Structures* 87, p. 1483 — SIMP; inclui 3D. Texto completo é restrito (polimi.it/handle/11311/982211 → só metadados).
 - Os exemplos dos próprios PDFs em `src/` (Borges 2022; Pantoja 2010; Queiroz & Leonel 2025) são o benchmark inicial: viga-parede, consolo, viga com abertura.
 - Benchmarks de **coerência interna** já automatizados em `packages/core/test`: viga em balanço vs. Euler-Bernoulli; reações = cargas; momento da seção central = ∫σx·y dA; ordem de grandeza das tensões.
+
+## Fontes adicionadas em `src2/` (nov/2026)
+| Arquivo | Conteúdo (conferido pela primeira página/resumo) |
+|---|---|
+| `xia2020.pdf` | Xia, Langelaar & Hendriks (2020), *Comput.-Aided Civ. Infrastruct. Eng.* — **avaliação crítica de resultados de TO para STM**; propõe extração de treliça (afinamento → nós candidatos → redução → conexões) e 3 índices: **STS** (treliça analisável, equilíbrio axial), **TRS** (cobertura das regiões tracionadas), **SR** (economia de aço). Casos: viga-parede com abertura, consolo, dente Gerber com abertura. |
+| `bruggi2009.pdf` | Bruggi (2009), *Comput. Struct.* 87 — SIMP de mínima flexibilidade para STM, 2D e 3D. |
+| `amir2013.pdf` | Amir (2013), procedimento de TO para estruturas de concreto armado (material não linear). |
+| `Liang_Xie_Steven_ACI_...pdf` | Liang, Xie & Steven (2000), *ACI Struct. J.* 97-S36 — TO evolucionária baseada em desempenho (PBO) para STM. |
+| `guest2010.pdf` / `Reinforced_Concrete_Design_with_Topology_Optimizat.pdf` | Guest & Moen (2010) — projeto de concreto armado com TO (mesmo trabalho, duas cópias). |
+| `jewett2019.pdf` | Jewett & Carstensen (2019), *Autom. Constr.* 102 — vigas de concreto otimizadas, construção e ensaio. |
+| `luo2012.pdf` | Luo et al. (2012), *Engineering Optimization* (conferir título exato). |
+| `pastore2019.pdf` | Pastore et al. (2019) — TO com restrição de tensão (fator de risco). |
+| `THALYSON_ISSAC_JESUS_BRITO.pdf` | Brito (UFS, fev/2026), dissertação: STM por TO discreta, **ground structure** (95 p.). |
+| `Cilamce2010-paper-1332.pdf` | Pantoja, Vaz & Martha (CILAMCE 2010) — critério de confiabilidade para STM. |
+| `001143839.pdf` | Borges (2022) — repetido de `src/`. |
+
+### O que a leitura de Xia et al. (2020) já ensina para este projeto
+- Eles dizem explicitamente que **a treliça extraída de um resultado de TO contínua normalmente não está em equilíbrio axial puro** e que gerar, no próprio processo de TO, treliças que cumpram o STM é um **problema em aberto**. Isso é o que observamos na extração experimental (resíduo de equilíbrio).
+- Ajuste manual dos nós (alinhar às cargas e reações) melhora o índice STS (ex.: 96,8% → 99,8%).
+- Recomendam **filtro** contra dependência de malha; critérios por energia de deformação e tensão de von Mises dão resultados parecidos, o de **1ª tensão principal é pior**; ESO, SIMP, isolinhas e homogêneo têm desempenho geral semelhante para STM.
+- Casos de teste a reproduzir: viga-parede com abertura (malha 50 mm, SIMP 40% de volume com filtro de sensibilidade), consolo (malha 10 mm) e dente Gerber com abertura.
+- Caminho alternativo: **ground structure** (Brito 2026) produz treliças diretamente — candidato a substituir o esqueleto morfológico.
