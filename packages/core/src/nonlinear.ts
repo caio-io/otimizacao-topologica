@@ -32,6 +32,8 @@ export const nbrConcrete = (fckMPa: number, gammaC = 1.4): ConcreteLaw => ({
 
 export interface SteelLaw {
   fy: number; ft: number; Es: number;
+  /** tension stiffening simplificado (interno): comportamento médio da barra na tração, ver `withTensionStiffening` */
+  ts?: { sigCr: number; epsCr: number; delta: number; epsU0: number };
   /** deformação na ruptura (limite de verificação) */
   epsU: number;
 }
@@ -96,8 +98,12 @@ export interface NlOptions {
   tangent?: boolean;
   /** rigidez residual do concreto fissurado como fração de E0 (só na matriz; padrão 1e-4) */
   ecrRatio?: number;
+  /** elemento do concreto: "q4" (padrão) ou "qm6" (EXPERIMENTAL: passa na compressão uniaxial, mas diverge no S1 fissurado; ver docs) */
+  element?: "q4" | "qm6";
   /** placas de apoio/carga elásticas (aço): a fileira de elementos sob cada trecho carregado ou apoiado deixa de ser concreto (E na mesma unidade da tensão do concreto) */
   plates?: { E: number; nu?: number };
+  /** tension stiffening simplificado em todas as barras: resistência à tração do concreto fct [kN/m²] e taxa efetiva ρeff (ver `withTensionStiffening`) */
+  tensionStiffening?: { fct: number; rhoEff: number };
   maxIt?: number;
 }
 
@@ -154,7 +160,51 @@ function concreteSigma(c: ConcreteLaw, e: number) {
   return c.fc;
 }
 
+/**
+ * Tension stiffening SIMPLIFICADO (Modelo da Corda Tracionada, fissuração estabilizada; Kaufmann et al., 2020, Eq. 3.2–3.3, p. 20):
+ * a barra passa a ter a lei média σsr(εm), com σsr a tensão na fissura (a que define a força). Trecho ε ≤ σy usa a Eq. 3.3 (1ª linha):
+ * εm = (σsr − Δ)/Es, Δ = λ·fct·(1−ρeff)/(2·ρeff), λ = 0,67. Antes da fissuração: reta da origem a (εcr, σcr = fct(1−ρeff)/ρeff).
+ * Depois do escoamento: ramo de endurecimento do aço nu deslocado de Δ/Es (aproximação NOSSA, não é a Eq. 3.3 completa), o que
+ * reduz a ductilidade (εu efetivo = εu − Δ/Es). fct e ρeff vêm do usuário; ρeff real depende da geometria (Fig. 3.3 do livro).
+ */
+export function withTensionStiffening(s: SteelLaw, fct: number, rhoEff: number, lambda = 0.67): SteelLaw {
+  const sigCr0 = (fct * (1 - rhoEff)) / rhoEff;
+  const sigCr = Math.min(sigCr0, 0.9 * s.fy), delta = (lambda / 2) * sigCr;
+  const epsCr = (sigCr - delta) / s.Es;
+  return { ...s, epsU: s.epsU - delta / s.Es, ts: { sigCr, epsCr, delta, epsU0: s.epsU } };
+}
+
+/** resolve A·X = B (A n×n, B n×m, ambos em linhas) por eliminação com pivô parcial; B vira X */
+function luSolve(A: Float64Array, n: number, B: Float64Array, m: number) {
+  for (let k = 0; k < n; k++) {
+    let piv = k;
+    for (let r = k + 1; r < n; r++) if (Math.abs(A[r * n + k]) > Math.abs(A[piv * n + k])) piv = r;
+    if (Math.abs(A[piv * n + k]) < 1e-300) A[piv * n + k] = 1e-300;
+    if (piv !== k) {
+      for (let c = 0; c < n; c++) { const t = A[k * n + c]; A[k * n + c] = A[piv * n + c]; A[piv * n + c] = t; }
+      for (let c = 0; c < m; c++) { const t = B[k * m + c]; B[k * m + c] = B[piv * m + c]; B[piv * m + c] = t; }
+    }
+    for (let r = k + 1; r < n; r++) {
+      const f = A[r * n + k] / A[k * n + k];
+      for (let c = k; c < n; c++) A[r * n + c] -= f * A[k * n + c];
+      for (let c = 0; c < m; c++) B[r * m + c] -= f * B[k * m + c];
+    }
+  }
+  for (let k = n - 1; k >= 0; k--) for (let c = 0; c < m; c++) {
+    let acc = B[k * m + c];
+    for (let j = k + 1; j < n; j++) acc -= A[k * n + j] * B[j * m + c];
+    B[k * m + c] = acc / A[k * n + k];
+  }
+}
+
 function steelSigma(s: SteelLaw, eps: number) {
+  if (s.ts && eps > 0) {
+    const { sigCr, epsCr, delta, epsU0 } = s.ts, ey = s.fy / s.Es, Esh = (s.ft - s.fy) / (epsU0 - ey);
+    if (eps <= epsCr) return (sigCr * eps) / epsCr;
+    const epsYm = (s.fy - delta) / s.Es;
+    if (eps <= epsYm) return delta + s.Es * eps;
+    return s.fy + Esh * (Math.min(eps, s.epsU) + delta / s.Es - ey);
+  }
   const a = Math.abs(eps), ey = s.fy / s.Es, sg = Math.sign(eps);
   if (a <= ey) return s.Es * eps;
   const Esh = (s.ft - s.fy) / (s.epsU - ey);
@@ -205,6 +255,12 @@ function windowMaxMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: 
 }
 
 function steelTangent(s: SteelLaw, eps: number) {
+  if (s.ts && eps > 0) {
+    const { sigCr, epsCr, delta, epsU0 } = s.ts, ey = s.fy / s.Es;
+    if (eps <= epsCr) return sigCr / epsCr;
+    if (eps <= (s.fy - delta) / s.Es) return s.Es;
+    return Math.max((s.ft - s.fy) / (epsU0 - ey), 1e-3 * s.Es);
+  }
   const ey = s.fy / s.Es;
   if (Math.abs(eps) <= ey) return s.Es;
   return Math.max((s.ft - s.fy) / (s.epsU - ey), 1e-3 * s.Es);
@@ -214,7 +270,9 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const { nelx, nely, h, t } = p;
   const m = buildModel(p);
   const { ndof, edof } = m;
-  const c = opt.concrete, bars = opt.bars ?? [];
+  const c = opt.concrete;
+  const ts = opt.tensionStiffening;
+  const bars = (opt.bars ?? []).map((b) => (ts ? { ...b, steel: withTensionStiffening(b.steel, ts.fct, ts.rhoEff) } : b));
   const origin = opt.origin ?? { x: 0, y: 0 };
   const tol = opt.tol ?? 1e-4, maxIt = opt.maxIt ?? 150;
   const check = opt.checkCrushing ?? true;
@@ -340,13 +398,56 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
 
   interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
 
+  let maxEpsC = 0, epsEl = new Float64Array(0), epsT = new Float64Array(0), sEl = new Float64Array(0);
+  const useQM6 = (opt.element ?? "q4") === "qm6";
+  const alpha = new Float64Array(nelx * nely * 4);
+  const Dm = new Float64Array(9);
+  let sxm = 0, sym = 0, txm = 0;
+  let secantOnly = false; // QM6: o laço local dos modos usa a rigidez secante (positiva e consistente com a lei), mais robusta que a tangente
+  const epsU3 = new Float64Array(12), fa = new Float64Array(4), Kaa = new Float64Array(16), rhs4 = new Float64Array(4);
+  const Kuu = new Float64Array(64), Kua = new Float64Array(32), Xm = new Float64Array(32), DBa = new Float64Array(12);
+  // Ba (3×4) nos 4 pontos de Gauss: modos φ1 = ξ²−1 e φ2 = η²−1 para u (a1, a2) e v (a3, a4); lado h → fator 2/h
+  const baG = new Float64Array(48);
+  for (let g = 0; g < 4; g++) {
+    const xi = (g & 1 ? 1 : -1) * GP, eta = (g & 2 ? 1 : -1) * GP, f = 2 / h;
+    baG[g * 12 + 0] = f * 2 * xi;          // εx  ← a1
+    baG[g * 12 + 4 + 3] = f * 2 * eta;     // εy  ← a4
+    baG[g * 12 + 8 + 1] = f * 2 * eta;     // γxy ← a2
+    baG[g * 12 + 8 + 2] = f * 2 * xi;      // γxy ← a3
+  }
+  /** lei do concreto num ponto de Gauss: deixa σ em (sxm, sym, txm) e D em Dm; book = true acumula os campos por elemento */
+  const material = (ex: number, ey: number, gm: number, e: number, book: boolean) => {
+    const avg = 0.5 * (ex + ey), rad = Math.hypot(0.5 * (ex - ey), 0.5 * gm);
+    const e1 = avg + rad, e3 = avg - rad;
+    if (book && e1 > 0) epsT[e] += e1 / 4;
+    const th = 0.5 * Math.atan2(gm, ex - ey), cs = Math.cos(th), sn = Math.sin(th);
+    const fresh = rad < 1e-14 && Math.abs(avg) < 1e-14;
+    let s1 = 0, s3 = 0, E1 = Ecr, E3 = Ecr;
+    if (fresh) { E1 = E3 = E0; }
+    else {
+      if (e1 < 0) { s1 = -concreteSigma(c, -e1); E1 = s1 / e1; }
+      if (e3 < 0) { s3 = -concreteSigma(c, -e3); E3 = s3 / e3; }
+      if (book && e3 < 0) { maxEpsC = Math.max(maxEpsC, -e3); epsEl[e] += -e3 / 4; }
+    }
+    const G = rad > 1e-12 ? (s1 - s3) / (2 * (e1 - e3)) : 0.25 * (E1 + E3);
+    if (useTan && !secantOnly && !fresh) {
+      if (e1 < 0) E1 = Math.max(Efloor, -e1 < c.eps0 ? E0 * (1 + e1 / c.eps0) : 0);
+      if (e3 < 0) E3 = Math.max(Efloor, -e3 < c.eps0 ? E0 * (1 + e3 / c.eps0) : 0);
+    }
+    const Gs = Math.max(G, 1e-6 * E0);
+    sxm = s1 * cs * cs + s3 * sn * sn; sym = s1 * sn * sn + s3 * cs * cs; txm = (s1 - s3) * sn * cs;
+    const sc = sn * cs, c2 = cs * cs, s2 = sn * sn;
+    if (book) { sEl[3 * e] += sxm / 4; sEl[3 * e + 1] += sym / 4; sEl[3 * e + 2] += txm / 4; }
+    const r1 = [c2, s2, sc], r3 = [s2, c2, -sc], rg = [-2 * sc, 2 * sc, c2 - s2];
+    for (let r = 0; r < 3; r++) for (let q = 0; q < 3; q++) Dm[r * 3 + q] = E1 * r1[r] * r1[q] + E3 * r3[r] * r3[q] + Gs * rg[r] * rg[q];
+  };
+
   const NOMAT = new Float64Array(0);
   /** needK = false: só forças internas e indicadores (para testar passos da busca linear, sem montar a matriz) */
   const assemble = (u: Float64Array, needK = true): Asm => {
     const L = needK ? new Float64Array(ndof * w) : NOMAT;
     const fint = new Float64Array(ndof);
-    let maxEpsC = 0;
-    const epsEl = new Float64Array(nelx * nely), epsT = new Float64Array(nelx * nely), sEl = new Float64Array(3 * nelx * nely);
+    maxEpsC = 0; epsEl = new Float64Array(nelx * nely); epsT = new Float64Array(nelx * nely); sEl = new Float64Array(3 * nelx * nely);
     const ue = new Float64Array(8), Ke = new Float64Array(64), B = new Float64Array(24), DB = new Float64Array(24), fe = new Float64Array(8);
     for (let e = 0; e < nelx * nely; e++) {
       if (p.mask[e] === 0) continue;
@@ -357,50 +458,92 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
         // placa de aço linear elástica
         for (let r = 0; r < 8; r++) { let acc = 0; for (let q = 0; q < 8; q++) acc += KEplate![r * 8 + q] * ue[q]; fe[r] = acc; }
         if (needK) Ke.set(KEplate!);
-      } else for (let g = 0; g < 4; g++) {
-        // deformações no ponto de Gauss
+      } else if (!useQM6) for (let g = 0; g < 4; g++) {
+        // Q4 compatível: deformações no ponto de Gauss
         let ex = 0, ey = 0, gm = 0;
         for (let a = 0; a < 4; a++) {
           const nx = dNx[g * 4 + a], ny = dNy[g * 4 + a], ux = ue[2 * a], uy = ue[2 * a + 1];
           ex += nx * ux; ey += ny * uy; gm += ny * ux + nx * uy;
         }
-        const avg = 0.5 * (ex + ey), rad = Math.hypot(0.5 * (ex - ey), 0.5 * gm);
-        const e1 = avg + rad, e3 = avg - rad;
-        if (e1 > 0) epsT[e] += e1 / 4;
-        const th = 0.5 * Math.atan2(gm, ex - ey), cs = Math.cos(th), sn = Math.sin(th);
-        // leis uniaxiais nas direções principais
-        const fresh = rad < 1e-14 && Math.abs(avg) < 1e-14;
-        let s1 = 0, s3 = 0, E1 = Ecr, E3 = Ecr;
-        if (fresh) { E1 = E3 = E0; }
-        else {
-          if (e1 < 0) { s1 = -concreteSigma(c, -e1); E1 = s1 / e1; }
-          if (e3 < 0) { s3 = -concreteSigma(c, -e3); E3 = s3 / e3; }
-          if (e3 < 0) { maxEpsC = Math.max(maxEpsC, -e3); epsEl[e] += -e3 / 4; }
-        }
-        const G = rad > 1e-12 ? (s1 - s3) / (2 * (e1 - e3)) : 0.25 * (E1 + E3);
-        if (useTan && !fresh) {
-          // módulos tangentes nas direções principais (piso para manter a matriz definida positiva)
-          if (e1 < 0) E1 = Math.max(Efloor, -e1 < c.eps0 ? E0 * (1 + e1 / c.eps0) : 0);
-          if (e3 < 0) E3 = Math.max(Efloor, -e3 < c.eps0 ? E0 * (1 + e3 / c.eps0) : 0);
-        }
-        const Gs = Math.max(G, 1e-6 * E0);
-        // σ global (coaxial) e D secante = Tεᵀ·diag(E1,E3,G)·Tε
-        const sx = s1 * cs * cs + s3 * sn * sn, sy = s1 * sn * sn + s3 * cs * cs, tx = (s1 - s3) * sn * cs;
-        const sc = sn * cs, c2 = cs * cs, s2 = sn * sn;
-        sEl[3 * e] += sx / 4; sEl[3 * e + 1] += sy / 4; sEl[3 * e + 2] += tx / 4;
-        const r1 = [c2, s2, sc], r3 = [s2, c2, -sc], rg = [-2 * sc, 2 * sc, c2 - s2];
-        const D = new Float64Array(9);
-        for (let r = 0; r < 3; r++) for (let q = 0; q < 3; q++) D[r * 3 + q] = E1 * r1[r] * r1[q] + E3 * r3[r] * r3[q] + Gs * rg[r] * rg[q];
-        // B (3×8)
+        material(ex, ey, gm, e, true);
         B.fill(0);
         for (let a = 0; a < 4; a++) {
           const nx = dNx[g * 4 + a], ny = dNy[g * 4 + a];
           B[2 * a] = nx; B[8 + 2 * a + 1] = ny; B[16 + 2 * a] = ny; B[16 + 2 * a + 1] = nx;
         }
-        if (needK) for (let r = 0; r < 3; r++) for (let q = 0; q < 8; q++) DB[r * 8 + q] = D[r * 3] * B[q] + D[r * 3 + 1] * B[8 + q] + D[r * 3 + 2] * B[16 + q];
+        if (needK) for (let r = 0; r < 3; r++) for (let q = 0; q < 8; q++) DB[r * 8 + q] = Dm[r * 3] * B[q] + Dm[r * 3 + 1] * B[8 + q] + Dm[r * 3 + 2] * B[16 + q];
         for (let r = 0; r < 8; r++) {
-          fe[r] += (B[r] * sx + B[8 + r] * sy + B[16 + r] * tx) * dV;
+          fe[r] += (B[r] * sxm + B[8 + r] * sym + B[16 + r] * txm) * dV;
           if (needK) for (let q = 0; q < 8; q++) Ke[r * 8 + q] += (B[r] * DB[q] + B[8 + r] * DB[8 + q] + B[16 + r] * DB[16 + q]) * dV;
+        }
+      } else {
+        // QM6: 4 modos incompatíveis por elemento (α), resolvidos localmente a cada montagem (o material não tem histórico,
+        // então α é função só de u) e condensados na rigidez
+        for (let g = 0; g < 4; g++) {
+          let ex = 0, ey = 0, gm = 0;
+          for (let a = 0; a < 4; a++) {
+            const nx = dNx[g * 4 + a], ny = dNy[g * 4 + a], ux = ue[2 * a], uy = ue[2 * a + 1];
+            ex += nx * ux; ey += ny * uy; gm += ny * ux + nx * uy;
+          }
+          epsU3[3 * g] = ex; epsU3[3 * g + 1] = ey; epsU3[3 * g + 2] = gm;
+        }
+        const ao = e * 4;
+        const strainAt = (g: number, k: number) => {
+          let v = epsU3[3 * g + k];
+          for (let c2 = 0; c2 < 4; c2++) v += baG[g * 12 + k * 4 + c2] * alpha[ao + c2];
+          return v;
+        };
+        secantOnly = true;
+        for (let it = 0; it < 30; it++) {
+          fa.fill(0); Kaa.fill(0);
+          for (let g = 0; g < 4; g++) {
+            material(strainAt(g, 0), strainAt(g, 1), strainAt(g, 2), e, false);
+            for (let r = 0; r < 4; r++) {
+              fa[r] += (baG[g * 12 + r] * sxm + baG[g * 12 + 4 + r] * sym + baG[g * 12 + 8 + r] * txm) * dV;
+              for (let q = 0; q < 4; q++) {
+                let acc = 0;
+                for (let i3 = 0; i3 < 3; i3++) for (let j3 = 0; j3 < 3; j3++) acc += baG[g * 12 + i3 * 4 + r] * Dm[i3 * 3 + j3] * baG[g * 12 + j3 * 4 + q];
+                Kaa[r * 4 + q] += acc * dV;
+              }
+            }
+          }
+          for (let r = 0; r < 4; r++) rhs4[r] = -fa[r];
+          luSolve(Kaa.slice(), 4, rhs4, 1);
+          let dm = 0;
+          for (let r = 0; r < 4; r++) { alpha[ao + r] += rhs4[r]; dm = Math.max(dm, Math.abs(rhs4[r])); }
+          if (dm < 1e-12) break;
+        }
+        secantOnly = false;
+        Kuu.fill(0); Kua.fill(0); Kaa.fill(0);
+        for (let g = 0; g < 4; g++) {
+          material(strainAt(g, 0), strainAt(g, 1), strainAt(g, 2), e, true);
+          B.fill(0);
+          for (let a = 0; a < 4; a++) {
+            const nx = dNx[g * 4 + a], ny = dNy[g * 4 + a];
+            B[2 * a] = nx; B[8 + 2 * a + 1] = ny; B[16 + 2 * a] = ny; B[16 + 2 * a + 1] = nx;
+          }
+          for (let r = 0; r < 8; r++) fe[r] += (B[r] * sxm + B[8 + r] * sym + B[16 + r] * txm) * dV;
+          if (!needK) continue;
+          for (let r = 0; r < 3; r++) {
+            for (let q = 0; q < 8; q++) DB[r * 8 + q] = Dm[r * 3] * B[q] + Dm[r * 3 + 1] * B[8 + q] + Dm[r * 3 + 2] * B[16 + q];
+            for (let q = 0; q < 4; q++) DBa[r * 4 + q] = Dm[r * 3] * baG[g * 12 + q] + Dm[r * 3 + 1] * baG[g * 12 + 4 + q] + Dm[r * 3 + 2] * baG[g * 12 + 8 + q];
+          }
+          for (let r = 0; r < 8; r++) {
+            for (let q = 0; q < 8; q++) Kuu[r * 8 + q] += (B[r] * DB[q] + B[8 + r] * DB[8 + q] + B[16 + r] * DB[16 + q]) * dV;
+            for (let q = 0; q < 4; q++) Kua[r * 4 + q] += (B[r] * DBa[q] + B[8 + r] * DBa[4 + q] + B[16 + r] * DBa[8 + q]) * dV;
+          }
+          for (let r = 0; r < 4; r++) for (let q = 0; q < 4; q++)
+            Kaa[r * 4 + q] += (baG[g * 12 + r] * DBa[q] + baG[g * 12 + 4 + r] * DBa[4 + q] + baG[g * 12 + 8 + r] * DBa[8 + q]) * dV;
+        }
+        if (needK) {
+          // Ke = Kuu − Kua · Kaa⁻¹ · Kau (X = Kaa⁻¹ Kau, 4×8)
+          for (let r = 0; r < 4; r++) for (let c2 = 0; c2 < 8; c2++) Xm[r * 8 + c2] = Kua[c2 * 4 + r];
+          luSolve(Kaa.slice(), 4, Xm, 8);
+          for (let r = 0; r < 8; r++) for (let q = 0; q < 8; q++) {
+            let acc = Kuu[r * 8 + q];
+            for (let k = 0; k < 4; k++) acc -= Kua[r * 4 + k] * Xm[k * 8 + q];
+            Ke[r * 8 + q] = acc;
+          }
         }
       }
       for (let a = 0; a < 8; a++) {
