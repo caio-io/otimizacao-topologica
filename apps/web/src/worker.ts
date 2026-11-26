@@ -73,6 +73,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
           const st = g.value; last = st; count++;
           post({ ...base, iter: count, u: st.u, reactions: [], residual: { x: 0, y: 0 }, done: false, warnings: first ? [...r.warnings, ...st.notes] : [],
             nl: { lambda: st.lambda, mode: null, epsComp: st.epsComp, epsTens: st.epsTens, stress: st.stress, barSamples: st.barSamples, bars: [], maxEpsC: st.maxEpsC, crushStrain: st.crushStrain,
+              crush: st.crush,
               epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: { x: 0, y: 0 } } });
           first = false;
           setTimeout(step, 0);
@@ -80,6 +81,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
           const res = g.value;
           post({ ...base, iter: count + 1, u: res.u, reactions: groupReactions(res.reaction), residual: res.equilibrium, done: true, warnings: first ? r.warnings : [],
             nl: { lambda: res.lambda, mode: res.mode, epsComp: res.epsComp, epsTens: res.epsTens, stress: res.stress, barSamples: res.barSamples, bars: res.bars, maxEpsC: res.maxCompStrain, crushStrain: res.crushStrain,
+              crush: res.crush, failure: res.failure, firstPlateau: res.firstPlateau,
               epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: res.equilibrium } });
         }
       } catch (err) { post({ kind: "error", token, errors: [String((err as Error).message ?? err)], warnings: [] }); }

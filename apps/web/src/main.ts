@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { STEEL_CLASSES, codeById, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
-import type { NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
+import type { CrushInfo, NlFailure, NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const cv = $<HTMLCanvasElement>("cv");
@@ -56,6 +56,8 @@ interface NlInfo {
   lambda: number; mode: "CC" | "FR" | "divergencia" | "lambdaMax" | "interrompida" | null;
   epsComp: Float64Array; epsTens: Float64Array; stress: Float64Array; barSamples: { x: number; y: number; N: number }[][]; bars: NlBarResult[];
   maxEpsC: number; crushStrain: number; epsCu: number; fc: number; crushLength: number; equilibrium: { x: number; y: number };
+  /** janela crítica de esmagamento (cada passo), falha final e início do patamar (último quadro) */
+  crush?: CrushInfo; failure?: NlFailure; firstPlateau?: { lambda: number; step: number } | null;
 }
 const frames: Msg[] = [];
 type CsfmData = ReturnType<typeof tensionZones>;
@@ -186,6 +188,16 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
       }
       ctx.fillStyle = col; ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
       if (showMesh) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.lineWidth = 0.5; ctx.strokeRect(X(i), Y(j), px, px); }
+    }
+    // janela crítica de esmagamento: contorno tracejado; vermelho forte quando a falha por compressão foi atingida
+    if (nl?.crush && (nl.crush.ratio >= 0.5 || nl.failure?.crush)) {
+      const cr = nl.failure?.crush ?? nl.crush, w = cr.window, failed = !!nl.failure?.crush;
+      ctx.save();
+      ctx.setLineDash([6, 4]); ctx.lineWidth = failed ? 2.5 : 1.5; ctx.strokeStyle = failed ? "#7b1e12" : "#c0392b";
+      ctx.strokeRect(wx(w.x0), wy(w.y1), wx(w.x1) - wx(w.x0), wy(w.y0) - wy(w.y1));
+      ctx.setLineDash([]); ctx.fillStyle = failed ? "#7b1e12" : "#c0392b"; ctx.font = "bold 12px system-ui";
+      ctx.fillText(failed ? "CC: falha por compressão" : `compressão ${(100 * cr.ratio).toFixed(0)} % de εcu`, wx(w.x0), wy(w.y1) - 5);
+      ctx.restore();
     }
     ctx.fillStyle = "#1c2430"; ctx.font = "12px system-ui";
     ctx.fillText(nl ? (mode === "nlstress" ? `Tensão principal de compressão / fc (${(nl.fc / 1000).toFixed(1)} MPa): cinza → vermelho; passe o mouse para ver σ1, σ3 e cisalhamento` : mode === "nlconc" ? `Deformação de compressão média / εcu (${(nl.epsCu * 1000).toFixed(1)} ‰): cinza → vermelho; marrom = esmagado` : "Azul: concreto fissurado (tração principal > 0) · barras: verde → vermelho = 0 → 100 % de fy; azul = compressão") : "Rode a análise não linear.", 14, cv.height - 30);
@@ -803,9 +815,16 @@ function renderNl() {
   let h = `<b>Carga aplicada: ${P.toFixed(0)} kN</b> (λ = ${n.lambda.toFixed(3)} × ${(m.P0 ?? 0).toFixed(0)} kN de referência)<br>`;
   h += n.mode ? `Modo de ruptura: <b>${MODOS[n.mode] ?? n.mode}</b><br>` : "Em andamento…<br>";
   h += `Deformação de compressão: ${(n.crushStrain * 1000).toFixed(2)} ‰ ${n.crushLength > 0 ? `(média em ${n.crushLength} m)` : "(pontual)"} de ${(n.epsCu * 1000).toFixed(1)} ‰ · máx. pontual ${(n.maxEpsC * 1000).toFixed(1)} ‰<br>`;
+  const P0 = m.P0 ?? 0;
+  if (n.failure?.crush) {
+    const c = n.failure.crush;
+    h += `<b style="color:#7b1e12">Falha por compressão do concreto</b> na região (${c.x.toFixed(2)}; ${c.y.toFixed(2)}) m: ε médio ${(c.strain * 1000).toFixed(2)} ‰ de ${(c.limit * 1000).toFixed(1)} ‰ na janela de ${(c.window.x1 - c.window.x0).toFixed(2)} × ${(c.window.y1 - c.window.y0).toFixed(2)} m; pico pontual ${(c.peak.strain * 1000).toFixed(1)} ‰ em (${c.peak.x.toFixed(2)}; ${c.peak.y.toFixed(2)}).<br>`;
+  }
+  if (n.failure?.bar) h += `<b style="color:#a93226">Ruptura da barra ${esc(n.failure.bar.label)}</b>${n.failure.bar.at ? ` perto de (${n.failure.bar.at.x.toFixed(2)}; ${n.failure.bar.at.y.toFixed(2)}) m` : ""}.<br>`;
+  if (n.firstPlateau) h += `O concreto entrou no patamar de compressão (≥ 95 % de ε0) em λ = ${n.firstPlateau.lambda.toFixed(3)} (P ≈ ${(n.firstPlateau.lambda * P0).toFixed(0)} kN, passo ${n.firstPlateau.step}).<br>`;
   if (n.bars.length) {
-    h += "<table><tr><th>barra</th><th>N máx (kN)</th><th>ε (‰)</th><th>escoou</th></tr>" +
-      n.bars.map((b) => `<tr><td>${esc(b.label)}</td><td>${b.axialMax.toFixed(0)}</td><td>${(b.strainMax * 1000).toFixed(2)}</td><td>${b.yielded ? "sim" : "não"}</td></tr>`).join("") + "</table>";
+    h += "<table><tr><th>barra</th><th>N máx (kN)</th><th>ε (‰)</th><th>escoou</th><th>escoou em P (kN)</th></tr>" +
+      n.bars.map((b) => `<tr><td>${esc(b.label)}</td><td>${b.axialMax.toFixed(0)}</td><td>${(b.strainMax * 1000).toFixed(2)}</td><td>${b.yielded ? "sim" : "não"}</td><td>${b.yieldLambda != null ? (b.yieldLambda * P0).toFixed(0) : "—"}</td></tr>`).join("") + "</table>";
   }
   if (n.mode && m.reactions.length) h += `Reações: ${m.reactions.map((r) => `${esc(r.id)} Ry=${r.ry.toFixed(0)} kN`).join(" · ")} · resíduo de equilíbrio ${(Math.max(n.equilibrium.x, n.equilibrium.y) * 100).toExponential(1)} %<br>`;
   h += "<i>Resultado do Nível 2 (sem kc2 nem tension stiffening): serve para equilíbrio e capacidade, não é projeto.</i>";

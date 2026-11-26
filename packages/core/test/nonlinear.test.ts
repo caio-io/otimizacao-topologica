@@ -171,4 +171,31 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     expect(r.bars[0].yielded).toBe(true);
     expect(r.equilibrium.y).toBeLessThan(1e-3);
   }, 120_000);
+
+  it("dados de falha: janela crítica de esmagamento (CC), início do patamar e barra que rompe (FR)", () => {
+    // CC: S1 em malha grossa (rápido); a janela fica dentro da geometria, junto a um apoio, e o patamar começa antes da falha
+    const sc = pierCapScene(0.06, 0.12), b = buildProblem(sc);
+    const r = solveNonlinear(b.problem!, { concrete: concreteFromScene(sc), bars: barsFromScene(sc), origin: b.origin, crushLength: 0.26 });
+    expect(r.failure.mode).toBe("CC");
+    const fc = r.failure.crush!;
+    expect(fc.ratio).toBeGreaterThanOrEqual(0.95);
+    expect(fc.window.x0).toBeGreaterThanOrEqual(-1e-9); expect(fc.window.x1).toBeLessThanOrEqual(1.2 + 1e-9);
+    expect(fc.window.y0).toBeGreaterThanOrEqual(-1e-9); expect(fc.window.y1).toBeLessThanOrEqual(1.0 + 1e-9);
+    expect(fc.y).toBeLessThan(0.4); // falha junto aos apoios (base da peça), como na Fig. 6.25 do livro
+    expect(fc.peak.strain).toBeGreaterThan(fc.strain);
+    expect(r.firstPlateau).not.toBeNull();
+    expect(r.firstPlateau!.lambda).toBeLessThanOrEqual(r.lambda);
+    expect(r.failure.bar).toBeNull();
+    // FR: tirante (T2) rompe; a barra aparece com λ de escoamento antes do último λ
+    const nelx = 10, nely = 2, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * (0 * (nely + 1) + j), 2 * (0 * (nely + 1) + j) + 1);
+    p.loads.push({ node: nelx * (nely + 1) + 1, fx: 1, fy: 0 });
+    const t2 = solveNonlinear(p, { concrete: nbrConcrete(30), bars: [{ x0: 0, y0: 0.05, x1: 0.5, y1: 0.05, area: 1e-3, steel: ca50, label: "tirante" }], dLambda: 50 });
+    expect(t2.failure.mode).toBe("FR");
+    expect(t2.failure.bar?.label).toBe("tirante");
+    expect(t2.bars[0].ruptured).toBe(true);
+    expect(t2.bars[0].yieldLambda!).toBeLessThan(t2.lambda);
+    expect(t2.bars[0].maxAt).not.toBeNull();
+  }, 120_000);
 });

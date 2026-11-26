@@ -154,7 +154,8 @@ A **legenda** (canto superior direito do canvas) hoje é fixa (tração vermelha
 - **Carga aplicada** e fator λ (sobre a carga de referência), carga por apoio.
 - **Modo de ruptura:** `CC` (esmagamento do concreto, ou perda de equilíbrio com o concreto no patamar), `FR` (ruptura de uma barra), `divergência` (o Newton não convergiu; *o rótulo pode ser impreciso*, a carga alcançada é o dado confiável), `λ máximo`.
 - Deformação de compressão: média na janela de esmagamento × εcu, e máximo pontual.
-- Tabela de barras: força axial máxima, deformação, se escoou.
+- Tabela de barras: força axial máxima, deformação, se escoou **e em que carga P escoou**; posição do trecho mais solicitado.
+- **Dados de falha (novos):** `failure` (modo, λ, janela crítica de esmagamento com centro, retângulo, ε médio × limite e pico pontual; barra que rompeu e onde), `crush` (a mesma janela em cada passo, para acompanhar a compressão crescer) e `firstPlateau` (primeiro passo com compressão ≥ 95 % de ε0). Hoje a tela desenha a janela crítica como contorno tracejado com rótulo "CC: falha por compressão" (vermelho forte na falha) e escreve a região no resumo.
 - Evolução: histórico de passos (λ, iterações), com o controle de iteração.
 - Reações de apoio e resíduo de equilíbrio.
 - Campos por elemento: deformação de compressão, tração principal, tensões.

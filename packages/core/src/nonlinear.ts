@@ -116,7 +116,37 @@ export interface NlOptions {
 
 export type NlMode = "CC" | "FR" | "divergencia" | "lambdaMax";
 
-export interface NlBarResult { label: string; axialMax: number; strainMax: number; yielded: boolean }
+export interface NlBarResult {
+  label: string; axialMax: number; strainMax: number; yielded: boolean;
+  /** fator de carga λ em que a barra passou a escoar (null = não escoou) */
+  yieldLambda: number | null;
+  /** posição (cena, m) do trecho com a maior força axial no estado último */
+  maxAt: { x: number; y: number } | null;
+  /** a barra atingiu o limite εu (a falha ocorre no passo seguinte ao último em equilíbrio) */
+  ruptured: boolean;
+}
+
+/** onde e quanto o concreto está esmagando (critério de esmagamento por média numa janela) */
+export interface CrushInfo {
+  /** deformação de compressão do critério (média na janela) e o limite εcu */
+  strain: number; limit: number; ratio: number;
+  /** centro da janela crítica [m, cena] e seu retângulo */
+  x: number; y: number;
+  window: { x0: number; y0: number; x1: number; y1: number };
+  /** elemento de maior compressão pontual e seu valor */
+  peak: { x: number; y: number; strain: number };
+}
+
+/** resumo do fim da análise: o que falhou, onde e com que carga */
+export interface NlFailure {
+  mode: NlMode;
+  /** λ da última carga em equilíbrio (limite inferior da falha) */
+  lambda: number;
+  /** concreto: janela crítica no estado que violou o critério (modo CC) */
+  crush: CrushInfo | null;
+  /** barra que atingiu εu (modo FR) */
+  bar: { label: string; at: { x: number; y: number } | null } | null;
+}
 
 export interface NlResult {
   /** fator de carga último (múltiplo da carga de referência do Problem) */
@@ -145,6 +175,12 @@ export interface NlResult {
   stress: Float64Array;
   /** avisos (p. ex. trechos de barra ligados ao elemento vizinho numa malha grossa) */
   notes: string[];
+  /** janela crítica de esmagamento no último estado em equilíbrio */
+  crush: CrushInfo;
+  /** o que falhou e onde */
+  failure: NlFailure;
+  /** primeiro passo em que o concreto passou de 95 % de ε0 (início do patamar) */
+  firstPlateau: { lambda: number; step: number } | null;
   /** iterações totais de equilíbrio e avaliações extras da busca linear (diagnóstico de desempenho) */
   work: { iterations: number; lineSearchTrials: number };
 }
@@ -155,6 +191,7 @@ export interface NlStep {
   u: Float64Array; epsComp: Float64Array; epsTens: Float64Array;
   barSamples: { x: number; y: number; N: number }[][];
   maxEpsC: number; crushStrain: number; notes: string[]; stress: Float64Array;
+  crush: CrushInfo;
 }
 
 interface BarEl { a: number; b: number; cx: number; cy: number; bar: number }
@@ -251,15 +288,17 @@ function windowMax(v: Float64Array, nelx: number, nely: number, R: number): numb
  * Maior média de `v` numa janela quadrada de (2R+1)² elementos (deslocada para caber na malha), dividida pelo número de
  * elementos de CONCRETO dentro da janela — vazios fora da peça não diluem a média nas bordas.
  */
-function windowMaxMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: number, R: number): number {
-  if (R <= 0) return v.reduce((m, x) => Math.max(m, x), 0);
+function windowArgMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: number, R: number): { best: number; e: number; i0: number; j0: number; i1: number; j1: number } {
+  let be = 0;
+  for (let e = 1; e < v.length; e++) if (v[e] > v[be]) be = e;
+  if (R <= 0) return { best: v[be], e: be, i0: Math.floor(be / nely), j0: be % nely, i1: Math.floor(be / nely) + 1, j1: (be % nely) + 1 };
   const W = nelx + 1, H = nely + 1, S = new Float64Array(W * H), M = new Float64Array(W * H);
   for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
     const k = (i + 1) * H + (j + 1), e = i * nely + j;
     S[k] = v[e] + S[i * H + (j + 1)] + S[(i + 1) * H + j] - S[i * H + j];
     M[k] = (mask[e] !== 0 ? 1 : 0) + M[i * H + (j + 1)] + M[(i + 1) * H + j] - M[i * H + j];
   }
-  let best = 0;
+  let best = 0, bi = 0, bj = 0, bi0 = 0, bj0 = 0, bi1 = 0, bj1 = 0;
   const n = 2 * R + 1;
   for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
     if (v[i * nely + j] === 0) continue;
@@ -267,9 +306,13 @@ function windowMaxMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: 
     const i1 = Math.min(nelx, i0 + n), j1 = Math.min(nely, j0 + n);
     const sum = S[i1 * H + j1] - S[i0 * H + j1] - S[i1 * H + j0] + S[i0 * H + j0];
     const cnt = M[i1 * H + j1] - M[i0 * H + j1] - M[i1 * H + j0] + M[i0 * H + j0];
-    if (cnt > 0) best = Math.max(best, sum / cnt);
+    if (cnt > 0 && sum / cnt > best) { best = sum / cnt; bi = i; bj = j; bi0 = i0; bj0 = j0; bi1 = i1; bj1 = j1; }
   }
-  return best;
+  return { best, e: bi * nely + bj, i0: bi0, j0: bj0, i1: bi1, j1: bj1 };
+}
+
+function windowMaxMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: number, R: number): number {
+  return windowArgMasked(v, mask, nelx, nely, R).best;
 }
 
 function steelTangent(s: SteelLaw, eps: number) {
@@ -373,6 +416,16 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     ? windowMax(eps, nelx, nely, Math.max(0, Math.round((opt.crushLength ?? 0) / (2 * h))))
     : windowMaxMasked(eps, cmask, nelx, nely, Math.max(0, Math.round(((opt.crushLength ?? 0) / h - 1) / 2)));
   const crushOf = (a: { epsEl: Float64Array; maxEpsC: number }) => (opt.crushLength ? crushWin(a.epsEl) : a.maxEpsC);
+  const rCrush = Math.max(0, Math.round(((opt.crushLength ?? 0) / h - 1) / 2));
+  const elXY = (e: number) => ({ x: origin.x + (Math.floor(e / nely) + 0.5) * h, y: origin.y + (nely - (e % nely) - 0.5) * h });
+  /** detalhes da janela crítica de esmagamento para um campo de compressão por elemento */
+  const crushDetail = (eps: Float64Array): CrushInfo => {
+    const w = windowArgMasked(eps, cmask, nelx, nely, rCrush);
+    let pe = 0;
+    for (let e = 1; e < eps.length; e++) if (eps[e] > eps[pe]) pe = e;
+    const x0 = origin.x + w.i0 * h, x1 = origin.x + w.i1 * h, y1 = origin.y + (nely - w.j0) * h, y0 = origin.y + (nely - w.j1) * h;
+    return { strain: w.best, limit: c.epsu, ratio: w.best / c.epsu, x: (x0 + x1) / 2, y: (y0 + y1) / 2, window: { x0, y0, x1, y1 }, peak: { ...elXY(pe), strain: eps[pe] } };
+  };
 
   // GDLs sem rigidez (só tocam vazios) viram restrições
   const used = new Uint8Array(ndof);
@@ -689,6 +742,9 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   let mode: NlMode = "lambdaMax";
   const dlMin = 1e-6;
   let everFailed = false;
+  let firstPlateau: { lambda: number; step: number } | null = null;
+  const yieldLam: (number | null)[] = bars.map(() => null);
+  let failCrush: CrushInfo | null = null, failBarK = -1;
   for (let guard = 0; guard < 2000; guard++) {
     const lamTry = Math.min(lamGood + dl, lamMax);
     // o 1º passo forma todo o padrão de fissuras (independe da escala da carga, pois ft = 0) e pede muitas iterações: dar mais folga a ele
@@ -703,18 +759,29 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     if (!failMode && !eq.ok) failMode = eq.asm.maxEpsC >= 0.95 * c.eps0 ? "CC" : "divergencia";
     if (failMode) {
       mode = failMode; everFailed = true;
+      if (failMode === "CC") failCrush = crushDetail(eq.asm.epsEl);
+      if (failMode === "FR") failBarK = bars.findIndex((b, k) => eq.asm.barEps[k] >= b.steel.epsU);
       if (dl <= dlMin || dl <= 1e-3 * Math.max(lamGood, 1e-3)) break;
       dl /= 2;
       continue;
     }
     lamGood = lamTry; uGood = eq.u; asmGood = eq.asm;
     steps.push({ lambda: lamGood, its: eq.its, rel: eq.rel });
-    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice() };
+    if (!firstPlateau && asmGood.maxEpsC >= 0.95 * c.eps0) firstPlateau = { lambda: lamGood, step: steps.length };
+    for (let k = 0; k < bars.length; k++) if (yieldLam[k] === null && asmGood.yielded[k]) yieldLam[k] = lamGood;
+    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice(), crush: crushDetail(asmGood.epsEl) };
     if (lamGood >= lamMax) { mode = "lambdaMax"; break; }
     // o passo volta a crescer mesmo depois de uma falha (antes ficava preso no menor valor e esgotava o limite de passos)
     if (eq.its <= (everFailed ? 3 : 6)) dl = Math.min(dl * (everFailed ? 1.25 : 1.5), opt.dLambda ?? 0.1);
     if (guard === 1999) notes.push("limite de 2000 passos atingido antes da falha: o resultado é só um limite inferior");
   }
+
+  const smpFinal = samplesOf(asmGood);
+  const barMaxAt = (k: number): { x: number; y: number } | null => {
+    let mx = -1, at: { x: number; y: number } | null = null;
+    for (const q of smpFinal[k]) if (Math.abs(q.N) > mx) { mx = Math.abs(q.N); at = { x: q.x, y: q.y }; }
+    return at;
+  };
 
   // reações nos GDLs restringidos: R = fint − λ·fRaw; equilíbrio global: ΣR + λ·ΣF = 0
   let fx = 0, fy = 0, rx = 0, ry = 0;
@@ -730,15 +797,25 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
 
   return {
     lambda: lamGood, mode, u: uGood,
-    bars: bars.map((b, k) => ({
-      label: b.label ?? `B${k + 1}`,
-      axialMax: asmGood.barForces[k].reduce((s, v) => Math.max(s, Math.abs(v)), 0),
-      strainMax: asmGood.barEps[k], yielded: asmGood.yielded[k],
-    })),
+    bars: bars.map((b, k) => {
+      const at = barMaxAt(k);
+      return {
+        label: b.label ?? `B${k + 1}`,
+        axialMax: asmGood.barForces[k].reduce((s2, v) => Math.max(s2, Math.abs(v)), 0),
+        strainMax: asmGood.barEps[k], yielded: asmGood.yielded[k],
+        yieldLambda: yieldLam[k], maxAt: at, ruptured: (mode === "FR" && failBarK === k) || asmGood.barEps[k] >= b.steel.epsU,
+      };
+    }),
     maxCompStrain: asmGood.maxEpsC,
     equilibrium: { x: eqx, y: eqy },
     steps, barForces: asmGood.barForces, reaction,
     epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl,
+    crush: crushDetail(asmGood.epsEl), firstPlateau,
+    failure: {
+      mode, lambda: lamGood,
+      crush: mode === "CC" ? failCrush ?? crushDetail(asmGood.epsEl) : null,
+      bar: mode === "FR" && failBarK >= 0 ? { label: bars[failBarK].label ?? `B${failBarK + 1}`, at: barMaxAt(failBarK) } : null,
+    },
     work: { iterations: steps.reduce((a, s) => a + s.its, 0), lineSearchTrials: lsTrials },
   };
 }
