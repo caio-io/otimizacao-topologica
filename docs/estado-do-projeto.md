@@ -87,7 +87,8 @@ Detalhes, tabelas e números em `docs/csfm-roteiro.md`. Resumo:
 - **Malha do livro (testada):** nenhuma interpretação da seção A-A reproduz os −3 % do livro; a mais plausível (pilar 0,64 m, 10 → 20 elementos) dá −14 %.
 - **Hipóteses adicionais testadas:** flare inclinado removido (mesmo −12 %: refutada); apoios só verticais (−6 %, mas o modo de ruptura vira ruptura da barra e a carga passa de 556 kN: a restrição horizontal rígida do canto contribui em parte, o modelo não é fiel ao ensaio). Falta o neoprene com rigidez horizontal finita (o solver não tem molas de apoio).
 - **Decisão (nov/2026):** encerrar a investigação de malha do S1 e tratar **539–615 kN (Q4, lc = 0,26 m) como a incerteza do modelo** (ensaio 556 kN; CSFM do livro 610–629 kN). Qualquer resultado do Nível 2 deve ser lido com essa faixa.
-- **Pendente:** nó de pórtico (não converge, fora da lista de exemplos); kc2 (fórmula não encontrada nas fontes lidas); εud = 10 ‰ da NBR como padrão de projeto; perfis normativos (NBR → EC2 → ACI → fib); módulo de bielas e tirantes manual (estilo CAST); extensão 3D (prompt de pesquisa em preparação, fora do repositório).
+- **Nó de pórtico:** converge com o apoio da viga (Ap2) travado em ux e uy (com ele livre na horizontal o 2º passo diverge a ≈ 10 % da carga); exemplo ilustrativo reativado na lista, sensível à malha (100 mm → 1089 kN; 50 mm → 850 kN).
+- **Pendente:** kc2 (só há gráfico no livro; opção `kc2` provisória, desligada) (fórmula não encontrada nas fontes lidas); εud = 10 ‰ da NBR como padrão de projeto; perfis normativos (NBR → EC2 → ACI → fib); módulo de bielas e tirantes manual (estilo CAST); extensão 3D (prompt de pesquisa em preparação, fora do repositório).
 
 ## 5. Fontes (`src/` e `src2/`)
 

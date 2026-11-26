@@ -63,14 +63,15 @@ export function pierCapScene(h = 0.04, bearing = 0.13): Scene {
  * Armadura (CA-50 nas barras principais, CA-60 nos estribos; valores de projeto): barra externa contínua pilar → viga (4Ø20),
  * face interna do pilar (4Ø16), face inferior da viga (2Ø16) e estribos Ø6,3 a cada 20 cm no pilar e na viga.
  */
-// PENDENTE: com este modelo a análise não linear NÃO converge ainda (para no 1º passo); por isso não está na lista de exemplos.
+// Apoio da viga (Ap2) travado em ux e uy: com ele livre na horizontal (só uy) a análise não linear não converge (o 2º passo diverge
+// a ≈ 10 % da carga). Sensível à malha: 100 mm → 1089 kN; 50 mm → 850 kN (rompe por esmagamento, CC).
 export function frameCornerScene(h = 0.05): Scene {
   const s = base(h, 0.4);
   s.t = 0.3; s.E = 30e6; s.nu = 0.2; s.fck = 30;
   s.nl = { values: "design", epsCu: 0.0035, crushLength: 0.3 };
   s.shapes.push({ id: "S1", mode: "add", pts: [[0, 0], [0.4, 0], [0.4, 2.3], [2.7, 2.3], [3.0, 2.3], [3.0, 2.8], [0, 2.8]] });
   s.supports.push({ id: "Ap1", x0: 0, y0: 0, x1: 0.4, y1: 0, ux: true, uy: true });
-  s.supports.push({ id: "Ap2", x0: 2.7, y0: 2.3, x1: 3.0, y1: 2.3, ux: false, uy: true });
+  s.supports.push({ id: "Ap2", x0: 2.7, y0: 2.3, x1: 3.0, y1: 2.3, ux: true, uy: true });
   s.loads.push({ id: "Q1", x: 0, y: 2.8, x1: 3.0, y1: 2.8, fx: 0, fy: -600 });
   const bar = (id: string, label: string, cls: "CA50" | "CA60", areaCm2: number, path: [number, number][], extra?: [number, number][][]): BarSpec => {
     const c = STEEL_CLASSES[cls];
@@ -93,6 +94,7 @@ export const SCENE_PRESETS: Record<string, () => Scene> = {
   "Viga-parede": () => deepBeamScene(false),
   "Viga-parede com abertura": () => deepBeamScene(true),
   "Cabeça de pilar S1 (CSFM, livro) — análise não linear": () => pierCapScene(),
+  "Nó de pórtico (exemplo ilustrativo) — análise não linear": () => frameCornerScene(),
 };
 
 const must = (s: Scene): Problem => {

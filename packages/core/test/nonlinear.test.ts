@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { base, barsFromScene, buildProblem, ca50, concreteFromScene, nbrConcrete, pierCapScene, plateLoad, solveNonlinear, solveNonlinearSteps } from "../src";
+import { base, barsFromScene, buildProblem, ca50, concreteFromScene, frameCornerScene, nbrConcrete, pierCapScene, plateLoad, solveNonlinear, solveNonlinearSteps } from "../src";
 import type { Problem } from "../src";
 
 /** bloco manual: todos os elementos de concreto */
@@ -159,4 +159,16 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     expect(r.equilibrium.y).toBeLessThan(1e-3);
     expect(Pu / PuMbt).toBeGreaterThan(0.85); // MBT com braço entre eixos dá o limite inferior aproximado
   }, 300_000);
+
+  it("nó de pórtico (exemplo ilustrativo, 100 mm): converge, equilibra e a barra externa escoa antes do esmagamento", () => {
+    const sc = frameCornerScene(0.1), b = buildProblem(sc);
+    expect(b.errors).toEqual([]);
+    const r = solveNonlinear(b.problem!, { concrete: concreteFromScene(sc), bars: barsFromScene(sc), origin: b.origin, crushLength: 0.3 });
+    console.log(`Nó de pórtico: λ=${r.lambda.toFixed(3)} (${(r.lambda * 600).toFixed(0)} kN) modo=${r.mode} passos=${r.steps.length}`);
+    expect(r.steps.length).toBeGreaterThan(5);
+    expect(r.mode).toBe("CC");
+    expect(r.lambda * 600).toBeGreaterThan(600); // acima da carga de serviço de referência (200 kN/m)
+    expect(r.bars[0].yielded).toBe(true);
+    expect(r.equilibrium.y).toBeLessThan(1e-3);
+  }, 120_000);
 });
