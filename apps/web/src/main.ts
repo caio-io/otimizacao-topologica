@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { STEEL_CLASSES, codeById, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { BAR_DIAMETERS, STEEL_CLASSES, barAreaCm2, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { CrushInfo, NlFailure, NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -33,7 +33,7 @@ const saved = loadSaved();
 let scene: Scene = saved ?? ALL_PRESETS[DEFAULT_PRESET]();
 type Sel = { kind: "shape" | "load" | "support"; id: string } | null;
 let sel: Sel = null;
-type Tool = "select" | "rect+" | "rect-" | "poly+" | "poly-" | "load" | "qload" | "support";
+type Tool = "select" | "rect+" | "rect-" | "poly+" | "poly-" | "load" | "qload" | "support" | "rebar";
 let tool: Tool = "select";
 let geomLocked = localStorage.getItem("stm-lock") === "1";
 let nextId = 100;
@@ -379,6 +379,8 @@ let drag: null | { type: string; start: [number, number]; cur: [number, number];
 let polyDraft: [number, number][] = [];
 let hover: [number, number] = [0, 0];
 let hoverGrip: [number, number] | null = null;
+/** pré-visualização da armadura inteligente (ferramenta "rebar") */
+let rebarPreview: { path: [number, number][]; a: [number, number]; b: [number, number] } | null = null;
 
 function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
@@ -399,6 +401,25 @@ function draw() {
     ctx.setLineDash([]);
     for (const [x, y] of sceneVertices(scene)) { ctx.fillStyle = "#fff"; ctx.strokeStyle = "#1f5fbf"; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.rect(wx(x) - 3, wy(y) - 3, 6, 6); ctx.fill(); ctx.stroke(); }
     if (hoverGrip) { ctx.fillStyle = "#1f5fbf"; ctx.beginPath(); ctx.arc(wx(hoverGrip[0]), wy(hoverGrip[1]), 6, 0, 7); ctx.fill(); }
+  }
+  if (tool === "rebar" && rebarPreview) {
+    const rp = rebarPreview, rb = rebarParams();
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(30,132,73,.28)"; ctx.lineWidth = 9; // face destacada
+    ctx.beginPath(); ctx.moveTo(wx(rp.a[0]), wy(rp.a[1])); ctx.lineTo(wx(rp.b[0]), wy(rp.b[1])); ctx.stroke();
+    ctx.strokeStyle = "#1e8449"; ctx.lineWidth = Math.max(2.5, rb.dia / 1000 * view.s); // espessura aproximada do diâmetro real
+    ctx.beginPath(); rp.path.forEach(([x, y], i) => (i ? ctx.lineTo(wx(x), wy(y)) : ctx.moveTo(wx(x), wy(y)))); ctx.stroke();
+    ctx.fillStyle = "#1e8449";
+    for (const [x, y] of rp.path) { ctx.beginPath(); ctx.arc(wx(x), wy(y), 3.5, 0, 7); ctx.fill(); }
+    const mid = rp.path[Math.floor(rp.path.length / 2)] ?? rp.path[0];
+    const txt = `${rb.n}Ø${String(rb.dia).replace(".", ",")} · cobrimento ${(rb.cover * 100).toFixed(1).replace(".", ",")} cm · As = ${barAreaCm2(rb.n, rb.dia).toFixed(2).replace(".", ",")} cm²`;
+    ctx.font = "bold 12px system-ui";
+    const tw = ctx.measureText(txt).width;
+    const tx = Math.max(8, Math.min(cv.width - tw - 8, wx(mid[0]) - tw / 2)), ty = Math.max(16, Math.min(cv.height - 8, wy(mid[1]) - 14));
+    ctx.fillStyle = "rgba(255,255,255,.92)"; ctx.fillRect(tx - 4, ty - 13, tw + 8, 18);
+    ctx.fillStyle = "#145a32"; ctx.fillText(txt, tx, ty);
+    ctx.restore();
   }
   ctx.strokeStyle = "#1f5fbf"; ctx.lineWidth = 1.5; ctx.setLineDash([6, 3]);
   if (drag && (tool === "rect+" || tool === "rect-")) {
@@ -515,6 +536,7 @@ cv.addEventListener("mousedown", (ev) => {
     if (!g) { toast("Clique sobre um lado (contorno) da geometria — as linhas pontilhadas azuis."); return; }
     if (tool === "support" || tool === "qload") drag = { type: "support", start: [g.x, g.y], cur: [g.x, g.y] };
   } else if (geomLocked && (tool === "rect+" || tool === "poly+")) toast("Geometria principal travada.");
+  else if (tool === "rebar") { /* a barra é criada no clique, com a pré-visualização */ }
   else if (tool === "poly+" || tool === "poly-") polyDraft.push(p);
   else drag = { type: tool, start: p, cur: p };
   draw();
@@ -595,6 +617,7 @@ window.addEventListener("mouseup", () => {
   changed(); renderProps();
 });
 cv.addEventListener("click", (ev) => {
+  if (tool === "rebar" && ev.button === 0) { createRebar(); return; }
   if (tool === "load" && ev.button === 0) {
     const [px, py] = evPos(ev), v = edgeGrip(px, py, 28);
     if (!v) return;
@@ -620,7 +643,8 @@ window.addEventListener("keydown", (ev) => {
   const tag = (ev.target as HTMLElement).tagName;
   if (tag === "INPUT" || tag === "SELECT") return;
   if (ev.key === "Enter" && tool.startsWith("poly")) finishPoly();
-  if (ev.key === "Escape") { polyDraft = []; drag = null; setTool("select"); draw(); }
+  if (tool === "rebar" && (ev.key === "1" || ev.key === "2" || ev.key === "3")) { $<HTMLSelectElement>("rbForm").value = ["reta", "L", "U"][+ev.key - 1]; updateRebarPreview(); }
+  if (ev.key === "Escape") { polyDraft = []; drag = null; rebarPreview = null; setTool("select"); draw(); }
   if ((ev.key === "Delete" || ev.key === "Backspace") && sel) {
     if (sel.kind === "shape" && shapeLocked(sel.id)) { toast("Geometria principal travada — destrave para excluir."); return; }
     scene.shapes = scene.shapes.filter((s) => s.id !== sel!.id);
@@ -640,7 +664,7 @@ cv.addEventListener("wheel", (ev) => {
 /* ───────────────────────── barra de ferramentas ───────────────────────── */
 const TOOLS: [Tool, string, boolean][] = [
   ["select", "Selecionar/mover", false], ["rect+", "▭ Retângulo", true], ["rect-", "▭ Abertura", false],
-  ["poly+", "⬠ Polígono", true], ["poly-", "⬠ Abertura poligonal", false], ["load", "↓ Força pontual", false], ["qload", "⇊ Carga distribuída", false], ["support", "△ Apoio", false],
+  ["poly+", "⬠ Polígono", true], ["poly-", "⬠ Abertura poligonal", false], ["load", "↓ Força pontual", false], ["qload", "⇊ Carga distribuída", false], ["support", "△ Apoio", false], ["rebar", "▤ Armadura", false],
 ];
 const tb = $("toolbar");
 for (const [t, label, geo] of TOOLS) {
@@ -659,6 +683,7 @@ function updateLock() {
 const fitBtn = document.createElement("button"); fitBtn.textContent = "Ajustar vista"; fitBtn.onclick = () => { fitView(); draw(); }; tb.appendChild(fitBtn);
 const hintEl = document.createElement("small"); hintEl.style.color = "#6b7686"; tb.appendChild(hintEl);
 const HINTS: Record<Tool, string> = {
+  rebar: "Passe o mouse sobre uma face: a barra aparece a cobrimento + Ø/2 do contorno. Clique para criar. 1 = reta, 2 = L, 3 = U. Esc sai.",
   select: "Clique para selecionar; arraste para mover; duplo clique numa força para editar o valor. Botão direito: panorâmica. Roda: zoom.",
   "rect+": "Arraste para desenhar um retângulo de material.", "rect-": "Arraste para desenhar uma abertura.",
   "poly+": "Clique os vértices; duplo clique ou Enter fecha.", "poly-": "Clique os vértices da abertura; duplo clique ou Enter fecha.",
@@ -832,11 +857,11 @@ function renderNl() {
 }
 function renderBars() {
   const el = $("barsList"), bars = scene.bars ?? [];
-  if (!bars.length) { el.innerHTML = '<small class="note">Este exemplo não tem armadura: a análise considera só o concreto (sem tração).</small>'; return; }
-  el.innerHTML = '<h2 style="margin-top:10px">Armadura</h2><small class="note">Aço passivo: CA-50 ou CA-60 (valores de projeto, fyk/1,15). “Ensaio” usa valores medidos do exemplo. Passe o mouse na barra para identificá-la.</small>';
+  if (!bars.length) { el.innerHTML = '<small class="note">Nenhuma barra no modelo: a análise considera só o concreto (sem tração). Use a ferramenta Armadura para criar.</small>'; return; }
+  el.innerHTML = '<small class="note"><b>Barras do modelo.</b> Aço passivo: CA-50 ou CA-60 (valores de projeto, fyk/1,15). “Ensaio” usa valores medidos do exemplo. Passe o mouse na barra para identificá-la.</small>';
   const g = document.createElement("div"); g.className = "barrow"; g.style.marginTop = "4px";
   const head = (t: string) => { const d = document.createElement("small"); d.className = "note"; d.textContent = t; g.appendChild(d); };
-  head("barra"); head("aço"); head("As (cm²)"); head("fy (MPa)");
+  head("barra"); head("aço"); head("As (cm²)"); head("fy (MPa)"); head("");
   for (const b of bars) {
     const row: HTMLElement[] = [];
     const name = document.createElement("small"); name.textContent = b.label; name.title = `${b.id} · ${b.path.length} pontos · aderência perfeita`; row.push(name);
@@ -855,6 +880,9 @@ function renderBars() {
     const fy = document.createElement("input"); fy.type = "number"; fy.step = "any"; fy.min = "0"; fy.value = String(Math.round(b.fy * 10) / 10); fy.disabled = (b.steelClass ?? "custom") !== "custom";
     fy.onchange = () => { const v = +fy.value; if (v > 0) { b.fy = v; b.ft = Math.max(b.ft, v * 1.05); changed(); } else fy.value = String(b.fy); };
     row.push(fy);
+    const del = document.createElement("button"); del.className = "del"; del.textContent = "×"; del.title = `Remover ${b.label}`;
+    del.onclick = () => { scene.bars = (scene.bars ?? []).filter((q) => q.id !== b.id); hoverBar = null; changed(); renderBars(); };
+    row.push(del);
     for (const c of row) { c.onmouseenter = () => { hoverBar = b.id; draw(); }; c.onmouseleave = () => { hoverBar = null; draw(); }; g.appendChild(c); }
   }
   el.appendChild(g);
@@ -1071,4 +1099,51 @@ presetSel.addEventListener("change", () => activateTab(presetSel.value.includes(
   let t: string | null = null;
   try { t = localStorage.getItem("stm.tab"); } catch { /* ignore */ }
   activateTab(presetSel.value.includes("não linear") ? "nl" : t === "otim" || t === "nl" ? t : "modelo");
+}
+
+
+/* ───────────────────────── armadura inteligente ───────────────────────── */
+{
+  const sel = $<HTMLSelectElement>("rbDia");
+  for (const d of BAR_DIAMETERS) sel.add(new Option(String(d).replace(".", ","), String(d)));
+  sel.value = "12.5";
+}
+function rebarParams() {
+  return {
+    cover: Math.max(0.005, +$<HTMLInputElement>("rbCover").value / 100 || 0.03),
+    dia: +$<HTMLSelectElement>("rbDia").value || 12.5,
+    n: Math.max(1, Math.round(+$<HTMLInputElement>("rbN").value) || 1),
+    steel: $<HTMLSelectElement>("rbSteel").value as "CA50" | "CA60",
+    form: $<HTMLSelectElement>("rbForm").value as "reta" | "L" | "U",
+    leg: Math.max(0.05, +$<HTMLInputElement>("rbLeg").value || 0.5),
+  };
+}
+let lastRebarPx: [number, number] | null = null;
+function updateRebarPreview() {
+  const prev = rebarPreview;
+  rebarPreview = null;
+  if (tool === "rebar" && lastRebarPx) {
+    const [wxm, wym] = toWorld(lastRebarPx[0], lastRebarPx[1]), rb = rebarParams();
+    const f = nearestFace(scene, wxm, wym, 40 / view.s);
+    if (f) {
+      const path = smartBarPath(scene, { shape: f.shape, i: f.i }, { form: rb.form, cover: rb.cover, dia: rb.dia, end: f.t < 0.5 ? 0 : 1, legLen: rb.leg });
+      if (path) rebarPreview = { path, a: f.a, b: f.b };
+    }
+    $("rbInfo").textContent = rebarPreview ? "" : "Aproxime o mouse de uma face da peça.";
+  }
+  if (prev || rebarPreview) draw();
+}
+cv.addEventListener("mousemove", (ev) => { lastRebarPx = evPos(ev); if (tool === "rebar") updateRebarPreview(); });
+cv.addEventListener("mouseleave", () => { lastRebarPx = null; if (rebarPreview) { rebarPreview = null; draw(); } });
+for (const id of ["rbCover", "rbDia", "rbN", "rbSteel", "rbForm", "rbLeg"]) $(id).addEventListener("change", () => updateRebarPreview());
+function createRebar() {
+  if (!rebarPreview) { toast("Aproxime o mouse de uma face da peça para ver a barra."); return; }
+  const rb = rebarParams(), c = STEEL_CLASSES[rb.steel], bars = (scene.bars ??= []);
+  const k = bars.length + 1;
+  const id = newId("B");
+  bars.push({
+    id, label: `As${k} (${rb.n}Ø${String(rb.dia).replace(".", ",")})`, path: rebarPreview.path.map((q) => [...q] as [number, number]),
+    areaCm2: barAreaCm2(rb.n, rb.dia), steelClass: rb.steel, fy: c.fy, ft: c.ft, Es: c.Es, epsU: c.epsU,
+  });
+  changed(); renderBars();
 }

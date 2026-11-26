@@ -195,7 +195,9 @@ Cada item existe porque o resultado numérico, sozinho, pode enganar:
 
 ## 10. Lacunas e funcionalidades planejadas
 
-**Armadura (maior lacuna de UX):**
+**Armadura: editor inteligente (implementado em nov/2026, evolui):** ferramenta *Armadura* na barra de ferramentas e grupo "Armadura" na aba Nível 2. O usuário informa **cobrimento (cm)**, **diâmetro**, **n barras na espessura**, **aço (CA-50/CA-60)**, **forma** (reta, L, U) e **perna da dobra (m)**. Ao passar o mouse sobre uma face, a barra aparece desenhada (cor verde, espessura proporcional ao Ø real) a **cobrimento + Ø/2 do contorno**, com o rótulo "nØd · cobrimento · As"; o clique cria a barra. Teclas 1/2/3 trocam a forma; Esc sai; a lista de barras tem o botão × para remover. Núcleo: `packages/core/src/rebar.ts` (faces maximais do contorno, offset com cantos em esquadria, formas reta/L/U, área n·π·Ø²/4). Em aberturas (cut) a barra fica fora do vazio. Limites: usa o contorno dos polígonos (não trata arestas internas entre polígonos sobrepostos); o cobrimento é da face à superfície da barra (sem estribo); não há ainda estribos, malhas, nem edição dos pontos de uma barra criada.
+
+**Armadura (lacunas restantes):**
 - Hoje: lista só de edição de As e fy, sem criar, apagar ou desenhar barras; barras só vêm nos exemplos.
 - Planejado: desenhar barras no canvas clicando pontos; **formas prontas** (reta, L com gancho, U, estribo retangular) com comprimento de ancoragem; entrada **n barras × diâmetro** com As calculado; classes CA-50/CA-60; duplicar, apagar, renomear.
 - Regra de detalhamento relevante ao nó de pórtico: **barras do pilar são retas; as que dobram são as da viga** (barras do topo da viga dobram para baixo dentro do pilar; as de baixo se ancoram no nó).

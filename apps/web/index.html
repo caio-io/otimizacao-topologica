@@ -64,7 +64,9 @@
     th:nth-child(2), td:nth-child(2) { text-align: left; }
     tr.tirante td { color: #a93226; } tr.biela td { color: #1a4f9c; } tr.nula td { color: #8a8f98; }
     #stm .warn { background: var(--warn-bg); color: var(--warn); padding: 4px 8px; border-radius: 4px; }
-    .barrow { display: grid; grid-template-columns: 1.5fr 1.1fr 0.9fr 0.9fr; gap: 3px 6px; align-items: center; }
+    .barrow { display: grid; grid-template-columns: 1.5fr 1.1fr 0.9fr 0.9fr 26px; gap: 3px 6px; align-items: center; }
+    .barrow .del { width: 26px; padding: 0; margin: 0; line-height: 1.4; color: #a93226; }
+    .rebarbox { border: 1px solid var(--line); border-radius: var(--radius); background: #f9fbfd; padding: 8px 10px 10px; margin-bottom: 8px; }
     .barrow.hl small { font-weight: 700; color: var(--brand); }
     .barrow select, .barrow input { margin-top: 0; font-size: 12px; padding: 1px 2px; }
 
@@ -176,6 +178,19 @@
             <label title="O critério de esmagamento usa a deformação MÉDIA numa janela desse comprimento (o livro do CSFM recomenda algo entre a profundidade da zona comprimida e a espessura). 0 = valor em cada ponto (muito sensível à malha).">Compr. de esmagamento (m)<input id="nlCrush" type="number" step="0.01" min="0" value="0.26" /></label>
           </div>
 
+          <h2>Armadura</h2>
+          <div class="rebarbox">
+            <small class="note">Escolha a ferramenta <b>▤ Armadura</b> acima do desenho e passe o mouse sobre uma face da peça: a barra aparece sozinha, acompanhando o contorno à distância do cobrimento. Clique para criar. Teclas <b>1</b> reta, <b>2</b> L, <b>3</b> U; <b>Esc</b> sai.</small>
+            <div class="grid2">
+              <label title="Distância da face de concreto até a SUPERFÍCIE da barra. O eixo da barra fica a cobrimento + Ø/2 da face.">Cobrimento (cm)<input id="rbCover" type="number" step="0.5" min="0.5" value="3" /></label>
+              <label>Diâmetro (mm)<select id="rbDia"></select></label>
+              <label title="Quantas barras iguais ficam lado a lado na espessura da peça (a análise é plana: a área total é n × π·Ø²/4).">Barras na espessura<input id="rbN" type="number" step="1" min="1" value="4" /></label>
+              <label>Aço<select id="rbSteel"><option value="CA50">CA-50</option><option value="CA60">CA-60</option></select></label>
+              <label>Forma<select id="rbForm"><option value="reta">Reta (a face inteira)</option><option value="L">L (dobra num canto)</option><option value="U">U (dobra nos dois cantos)</option></select></label>
+              <label title="Comprimento da perna de dobra/ancoragem, limitado ao tamanho da face vizinha.">Perna da dobra (m)<input id="rbLeg" type="number" step="0.05" min="0.05" value="0.5" /></label>
+            </div>
+            <small id="rbInfo" class="note"></small>
+          </div>
           <div id="barsList"></div>
 
           <h2>Análise</h2>

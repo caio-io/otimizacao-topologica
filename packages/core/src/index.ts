@@ -10,3 +10,4 @@ export * from "./csfm";
 export * from "./indices";
 export * from "./nonlinear";
 export * from "./codes";
+export * from "./rebar";
