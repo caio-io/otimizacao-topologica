@@ -99,6 +99,10 @@ export interface NlOptions {
   tangent?: boolean;
   /** rigidez residual do concreto fissurado como fração de E0 (só na matriz; padrão 1e-4) */
   ecrRatio?: number;
+  /** diagnóstico: chamado a cada iteração do Newton (resíduo relativo, fração da busca linear, nº de elementos fissurados e quantos mudaram de estado) */
+  trace?: (t: { lam: number; it: number; rel: number; alpha: number; cracked: number; changed: number; maxEpsC: number }) => void;
+  /** amolecimento da compressão por tração transversal: kc2(ε1) multiplica fc (e kc2·ε0 no pico); true usa `kc2Provisional` */
+  kc2?: boolean | ((eps1: number) => number);
   /** elemento do concreto: "q4" (padrão) ou "qm6" (EXPERIMENTAL: passa na compressão uniaxial, mas diverge no S1 fissurado; ver docs) */
   element?: "q4" | "qm6";
   /** placas de apoio/carga elásticas (aço): a fileira de elementos sob cada trecho carregado ou apoiado deixa de ser concreto (E na mesma unidade da tensão do concreto) */
@@ -155,6 +159,17 @@ interface BarEl { a: number; b: number; cx: number; cy: number; bar: number }
 
 const GP = 1 / Math.sqrt(3);
 const XI = [-1, 1, 1, -1], ETA = [-1, -1, 1, 1];
+
+/**
+ * kc2 PROVISÓRIO (compression softening por tração transversal ε1, Kaufmann et al., 2020, Fig. 3.1e, p. 16: só há gráfico no livro).
+ * Leitura aproximada do gráfico: kc2 = 1 até ε1 = 1 ‰; reta até (6 ‰; 0,65); depois a forma do MC2010 final,
+ * 1/(1,2 + 55·ε1), que coincide visualmente com a curva do livro (NÃO verificada em fonte). Não substitui a fonte.
+ */
+export function kc2Provisional(eps1: number): number {
+  if (eps1 <= 0.001) return 1;
+  if (eps1 <= 0.006) return 1 - ((eps1 - 0.001) / 0.005) * 0.35;
+  return 1 / (1.2 + 55 * eps1);
+}
 
 function concreteSigma(c: ConcreteLaw, e: number) {
   if (e <= c.eps0) { const r = 1 - e / c.eps0; return c.fc * (1 - r * r); }
@@ -404,6 +419,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const alpha = new Float64Array(nelx * nely * 4);
   const Dm = new Float64Array(9);
   let sxm = 0, sym = 0, txm = 0;
+  const kc2fn = opt.kc2 === true ? kc2Provisional : typeof opt.kc2 === "function" ? opt.kc2 : null;
   let secantOnly = false; // QM6: o laço local dos modos usa a rigidez secante (positiva e consistente com a lei), mais robusta que a tangente
   const epsU3 = new Float64Array(12), fa = new Float64Array(4), Kaa = new Float64Array(16), rhs4 = new Float64Array(4);
   const Kuu = new Float64Array(64), Kua = new Float64Array(32), Xm = new Float64Array(32), DBa = new Float64Array(12);
@@ -423,17 +439,20 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     if (book && e1 > 0) epsT[e] += e1 / 4;
     const th = 0.5 * Math.atan2(gm, ex - ey), cs = Math.cos(th), sn = Math.sin(th);
     const fresh = rad < 1e-14 && Math.abs(avg) < 1e-14;
-    let s1 = 0, s3 = 0, E1 = Ecr, E3 = Ecr;
+    let s1 = 0, s3 = 0, E1 = Ecr, E3 = Ecr, kk = 1;
     if (fresh) { E1 = E3 = E0; }
     else {
       if (e1 < 0) { s1 = -concreteSigma(c, -e1); E1 = s1 / e1; }
-      if (e3 < 0) { s3 = -concreteSigma(c, -e3); E3 = s3 / e3; }
+      if (e3 < 0) {
+        kk = kc2fn && e1 > 0 ? kc2fn(e1) : 1;
+        s3 = -concreteSigma(kk < 1 ? { fc: c.fc * kk, eps0: c.eps0 * kk, epsu: c.epsu } : c, -e3); E3 = s3 / e3;
+      }
       if (book && e3 < 0) { maxEpsC = Math.max(maxEpsC, -e3); epsEl[e] += -e3 / 4; }
     }
     const G = rad > 1e-12 ? (s1 - s3) / (2 * (e1 - e3)) : 0.25 * (E1 + E3);
     if (useTan && !secantOnly && !fresh) {
       if (e1 < 0) E1 = Math.max(Efloor, -e1 < c.eps0 ? E0 * (1 + e1 / c.eps0) : 0);
-      if (e3 < 0) E3 = Math.max(Efloor, -e3 < c.eps0 ? E0 * (1 + e3 / c.eps0) : 0);
+      if (e3 < 0) E3 = Math.max(Efloor, -e3 < c.eps0 * kk ? E0 * (1 + e3 / (c.eps0 * kk)) : 0);
     }
     const Gs = Math.max(G, 1e-6 * E0);
     sxm = s1 * cs * cs + s3 * sn * sn; sym = s1 * sn * sn + s3 * cs * cs; txm = (s1 - s3) * sn * cs;
@@ -622,6 +641,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       return Math.sqrt(n);
     };
     let asm = assemble(u), rel = Infinity, its = 0;
+    const prevCr = new Uint8Array(nelx * nely);
     for (; its < itLimit; its++) {
       let nr = 0;
       for (let d = 0; d < ndof; d++) { R[d] = fixedEff[d] ? 0 : rhsLam[d] - asm.fint[d]; nr += R[d] * R[d]; }
@@ -630,6 +650,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       if (rel < tol) return { ok: true, u, asm, rel, its };
       solveBandedAssembled(asm.L, ndof, bw, fixedEff, R, du);
       // passo completo; com busca linear, se não reduz o resíduo tenta frações do passo e fica com a melhor
+      let alphaUsed = 1;
       let uTry = u.map((v, d) => v + du[d]), bad = uTry.some((v) => !Number.isFinite(v));
       if (bad) return { ok: false, u, asm, rel, its };
       let asmTry = assemble(uTry);
@@ -644,8 +665,14 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
             if (n < bestN) { bestN = n; bestA = a; }
             if (n < nr) break; // reduziu: basta
           }
+          alphaUsed = bestA;
           if (bestA !== 1) { uTry = u.map((v, d) => v + bestA * du[d]); asmTry = assemble(uTry); }
         }
+      }
+      if (opt.trace) {
+        let cr = 0, ch = 0;
+        for (let e = 0; e < nelx * nely; e++) { const f = asmTry.epsT[e] > 1e-12 ? 1 : 0; cr += f; if (f !== prevCr[e]) { ch++; prevCr[e] = f; } }
+        opt.trace({ lam, it: its, rel, alpha: alphaUsed, cracked: cr, changed: ch, maxEpsC: asmTry.maxEpsC });
       }
       u = uTry; asm = asmTry;
     }

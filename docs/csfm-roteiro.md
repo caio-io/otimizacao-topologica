@@ -288,3 +288,20 @@ Com ux livre o apoio deixa de ser o ponto crítico: o tirante As1 recebe o empux
 - **A relação kc2(ε1) só aparece como GRÁFICO (Fig. 3.1e)**, curva que parte de 1,0 em ε1 = 0 e decresce, comparada com a do MCFT (Vecchio e Collins) e a do fib MC2010. O texto (p. 17) diz que ela é "uma generalização da proposta do fib MC2010 para verificações de cisalhamento, que tem valor limite de 0,65" e que a redução do MCFT, derivada em tensões médias, "pode ser excessiva" para o CSFM, que trabalha com tensões máximas nas fissuras. **Não há expressão analítica no livro.**
 - **O fib Model Code 2010 "First complete draft" (Boletim 56, Vol. 2, local em `src-fib`) NÃO traz kε(ε1):** só kc constante, 0,55·(30/fck)^(1/3) ≤ 0,55 (Eq. 7.3-21/24, p. 35–36) e 0,5·(30/fck)^(1/3) ≤ 0,5 (Eq. 7.3-17, p. 34). A forma kε = 1/(1,2 + 55·ε1) ≤ 0,65, de memória, seria da versão final do MC2010 e **não foi verificada** aqui.
 - **Relevância:** no S1, o livro (p. 140) diz que o kc2 "quase não afeta" a resistência de compressão porque as deformações transversais são muito pequenas. Para reproduzir o S1 o kc2 é dispensável; importa em vigas-parede e almas com tração transversal relevante (estribos). Continua postergado até haver a expressão numa fonte conferida; alternativa provisória: digitalizar a Fig. 3.1e como tabela (aproximada e marcada como tal).
+
+## kc2 provisório e diagnóstico do 1º passo (opções `kc2` e `trace`, desligadas por padrão)
+
+**kc2 provisório** (`kc2: true`): leitura aproximada da Fig. 3.1e do livro (kc2 = 1 até ε1 = 1 ‰, reta até 0,65 em 6 ‰, depois 1/(1,2 + 55·ε1), forma do MC2010 final que coincide visualmente com a curva; **fonte não verificada**); multiplica fc e ε0 do pico da parábola; a tangente não inclui ∂kc2/∂ε1.
+
+| Caso | sem kc2 | com kc2 provisório |
+|---|---|---|
+| S1 40 mm | 615 kN | 503 kN |
+| S1 30 mm | 583 kN | 468 kN |
+| S1 20 mm | 539 kN | 423 kN (FR) |
+| T3 viga-parede com tirante | 2252 kN (FR) | 2014 kN (CC) |
+
+No S1 o kc2 provisório derruba a carga 18–22 % e agrava a dependência de malha (−16 % de 40 a 20 mm); o livro, com kc2 ligado por padrão no M0, obtém 610–629 kN e diz (p. 140) que o kc2 quase não afeta a S1 (deformações transversais pequenas, com tension stiffening). Nosso ε1 é o da barra nua e pontual (maior). Hipótese a testar: kc2 + tension stiffening simplificado.
+
+**1º passo do Newton (S1, traço por iteração):** 48 iterações em 40 mm, 175 em 20 mm. O padrão de fissuras estabiliza em ≈ 12 iterações (trocas de estado ≈ 0), e a busca linear corta o passo (α < 1) em 172 das 175 iterações: convergência linear lenta com o padrão fixo, **não** oscilação de fissuras nem propagação. Cerca de 60 % da malha já está "fissurada" (rigidez 1e-4·E0) com a carga mínima, o que deixa o sistema mal condicionado (hipótese, coerente com os testes de rigidez residual). Custo de tempo, sem efeito na carga final.
+
+**kc2 + tension stiffening simplificado (S1, ρeff = 0,5 / 1 / 2 %):** 40 mm 511 / 510 / 508 kN; 20 mm 433 / 432 / 430 kN. O tension stiffening **não** recupera a carga (sem TS: 503 e 423 kN): a hipótese de que ele explicaria a diferença para o livro (610–629 kN com kc2 + TS) **fica refutada** no nosso modelo. Seguem as diferenças possíveis: forma real da curva kc2(ε1) em 0–6 ‰ (só há gráfico), uso de ε1 pontual × médio, TS completo do livro (só a 1ª linha da Eq. 3.3 foi implementada) e o modelo de arrancamento para estribos. Com o kc2 provisório ligado, o S1 fica **abaixo** do ensaio (423–503 kN contra 556 kN): manter `kc2` desligado por padrão.
