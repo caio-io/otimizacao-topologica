@@ -76,6 +76,17 @@ Campo elástico do domínio cheio → zonas tracionadas (σ1 acima de 5% da tra�
 Artigo Lu et al. (2025) registrado em `docs/referencias.md`; decisões do CSFM em `docs/csfm-guia.md`. Repositório privado `caio-io/otimizacao-topologica`, branches `dev` e `main` no mesmo commit.
 Modelos adicionais em desenvolvimento interno ficam em arquivos `*.local.*` (ignorados pelo git; a interface os carrega se existirem).
 
+### 4.8 Nível 2 (análise não linear estilo CSFM): o que foi tentado, inclusive o que não funcionou
+
+Detalhes, tabelas e números em `docs/csfm-roteiro.md`. Resumo:
+
+- **Funciona:** solver não linear (concreto sem tração, fissura girante, parábola-retângulo, barras embutidas, Newton com busca linear, passo adaptativo), critério de esmagamento por média numa janela física (lc = espessura, como o livro do CSFM, p. 18/104/137), aços CA-50/CA-60, interface (vistas de deformação, fissuração, tensões, barras e dica do mouse). S1 (cabeça de pilar): 539–615 kN por apoio contra 556 kN do ensaio e 568–629 kN do CSFM do livro.
+- **Defeito corrigido:** o "não convergiu" do S1 alinhado em 20 mm (389 kN) era artefato do controle de passo (passo preso em 0,0002 + teto de 2000 passos), não divergência física. Agora o passo volta a crescer, o 1º passo tem 4× mais iterações e há aviso do teto de passos.
+- **Problema em aberto:** a carga do S1 cai ≈ 12 % ao refinar de 40 para 20 mm (o livro relata < 5 %). Hipóteses **testadas e que NÃO explicam** a dependência: geometria alinhada ao elemento; janela de esmagamento (tamanho e normalização); placas de apoio elásticas (opção `plates`: elevam a carga 10–14 %, mas a queda 40→20 mm sobe para 16 %; a espessura da placa muda junto com a malha, ressalva); tension stiffening simplificado (opção `tensionStiffening`: < 2 %, em linha com o livro, p. 140); rigidez residual do concreto; tangente × secante.
+- **Tentado e não funciona:** QM6 no solver não linear (opção `element: "qm6"`, experimental): passa na compressão uniaxial, mas diverge no S1 fissurado desde o 1º passo. Hipótese não testada: mecanismos sem energia dos modos incompatíveis com tração nula. Alternativas: EAS, limitar os modos nos elementos fissurados.
+- **Ainda não testado:** equivalência entre a malha do livro (10 e 20 elementos na seção A-A; a legenda da Fig. 6.24 diz 4 e 8) e a nossa (40 e 20 mm).
+- **Pendente:** nó de pórtico (não converge, fora da lista de exemplos); kc2 (fórmula não encontrada nas fontes lidas); εud = 10 ‰ da NBR como padrão de projeto; perfis normativos (NBR → EC2 → ACI → fib); módulo de bielas e tirantes manual (estilo CAST); extensão 3D (prompt de pesquisa em preparação, fora do repositório).
+
 ## 5. Fontes (`src/` e `src2/`)
 
 | Fonte | Uso no projeto | Lida a fundo? |
