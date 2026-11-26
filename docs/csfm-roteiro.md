@@ -259,3 +259,7 @@ O livro varia "o número de elementos ao longo da seção A-A" (Tab. 6.16: 10 �
 | B: largura total 1,2 m, 10 → 20 elementos (120 → 60 mm) | 1027 kN | 601 kN | −41 % |
 
 Nenhuma interpretação reproduz os −3 % do livro; a mais plausível (A, 10 → 20) dá −14 %, perto do nosso 40 → 20 mm (−12 %). A comparação **não dissolve** a diferença: a dependência de malha do nosso solver é maior que a do livro. Observação: as cargas do livro (610–629 kN) coincidem com as nossas em h ≈ 40–60 mm (601–615 kN), mas o livro usa malha não estruturada e (no M0) tension stiffening. Seção A-A e tipo de malha do livro continuam não verificados.
+
+## Hipótese testada: a "escada" do flare inclinado causa a dependência de malha? Não.
+
+S1 com o flare removido (corpo retangular 1,2 × 0,48 m + pilar 0,64 m; topo em 1,00 m, alinhado; sem contorno inclinado, portanto sem escada): **40 mm 616 kN, 20 mm 541 kN (−12 %)**, praticamente idêntico à geometria original (615 → 539 kN). O contorno inclinado não influencia o resultado nem a dependência de malha. Hipóteses já refutadas para os −12 %: geometria alinhada, flare inclinado, janela de esmagamento, placas elásticas, tension stiffening, rigidez residual, tangente × secante. Sobram: elemento (QM6 não funcionou), o modo de ruptura localizado no canto do apoio (apoio rígido com ux e uy fixos) e o próprio modelo constitutivo sem tração.
