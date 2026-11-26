@@ -108,6 +108,22 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     expect(buildProblem(sc).errors).toEqual([]);
   });
 
+
+  it("S1 em malhas grossas (0,06 a 0,1 m): barras no contorno inclinado não derrubam a análise (ligam ao elemento vizinho)", () => {
+    for (const h of [0.06, 0.08, 0.1]) {
+      const sc = pierCapScene(h), b = buildProblem(sc);
+      expect(b.errors).toEqual([]);
+      const g = solveNonlinearSteps(b.problem!, { concrete: concreteFromScene(sc), bars: barsFromScene(sc), origin: b.origin, crushLength: 0.26, stepwise: true, dLambda: 0.1, maxIt: 200 });
+      let r = g.next(), notes: string[] = [];
+      if (!r.done) notes = r.value.notes;
+      while (!r.done) r = g.next();
+      console.log(`S1 h=${h}: λ=${r.value.lambda.toFixed(3)} (${(r.value.lambda * 1000).toFixed(0)} kN/apoio real) modo=${r.value.mode} aviso: ${notes[0] ?? "—"}`);
+      expect(r.value.lambda).toBeGreaterThan(0.2);
+      expect(r.value.lambda).toBeLessThan(1.5);
+      if (h >= 0.08) expect(notes.length).toBeGreaterThan(0); // houve projeção
+    }
+  });
+
   it("T3 viga-parede com tirante: tirante escoa, equilíbrio de seção consistente (braço de alavanca cabe na altura) e capacidade ≥ MBT", () => {
     const h = 0.05;
     const s = base(h, 0.4);

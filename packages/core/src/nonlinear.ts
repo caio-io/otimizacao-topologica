@@ -107,6 +107,8 @@ export interface NlResult {
   barSamples: { x: number; y: number; N: number }[][];
   /** deformação de compressão usada no critério de esmagamento (média na janela, se `crushLength`) */
   crushStrain: number;
+  /** avisos (p. ex. trechos de barra ligados ao elemento vizinho numa malha grossa) */
+  notes: string[];
 }
 
 /** estado de um passo de carga convergido (só emitido com `stepwise: true`) */
@@ -114,7 +116,7 @@ export interface NlStep {
   lambda: number; its: number;
   u: Float64Array; epsComp: Float64Array; epsTens: Float64Array;
   barSamples: { x: number; y: number; N: number }[][];
-  maxEpsC: number; crushStrain: number;
+  maxEpsC: number; crushStrain: number; notes: string[];
 }
 
 interface BarEl { a: number; b: number; cx: number; cy: number; bar: number }
@@ -192,6 +194,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   // ---- barras embutidas: trechos de ~h/4 com o vetor g (ε_axial = g·u_e) do elemento que contém o ponto médio
   interface Piece { e: number; g: Float64Array; len: number; bar: number; xm: number; ym: number }
   const pieces: Piece[] = [];
+  let projected = 0; // trechos cujo elemento natural é vazio (malha grossa) e foram ligados ao elemento de concreto vizinho
   bars.forEach((bar, k) => {
     if (!bar.path) return;
     for (let q = 0; q + 1 < bar.path.length; q++) {
@@ -203,9 +206,23 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       for (let r = 0; r < n; r++) {
         const x = xa + ((r + 0.5) / n) * (xb - xa) - origin.x, y = ya + ((r + 0.5) / n) * (yb - ya) - origin.y;
         const ie = Math.min(nelx - 1, Math.max(0, Math.floor(x / h))), jy = Math.min(nely - 1, Math.max(0, Math.floor(y / h)));
-        const je = nely - 1 - jy, e = ie * nely + je;
-        if (p.mask[e] === 0) throw new Error(`barra ${bar.label ?? k}: trecho fora da geometria em (${(x + origin.x).toFixed(3)}, ${(y + origin.y).toFixed(3)})`);
-        const xi = 2 * (x - ie * h) / h - 1, eta = 2 * (y - jy * h) / h - 1;
+        let iu = ie, ju = jy; // coluna e linha (de baixo para cima) do elemento hospedeiro
+        if (p.mask[ie * nely + (nely - 1 - jy)] === 0) {
+          // o contorno inclinado vira "escada" na malha: o elemento que contém o ponto pode ser vazio mesmo com a barra dentro
+          // da peça. Usa o elemento de concreto mais próximo (até 3 elementos) e prende as coordenadas locais ao elemento.
+          let best = Infinity;
+          for (let di = -3; di <= 3; di++) for (let dj = -3; dj <= 3; dj++) {
+            const ci = ie + di, cj = jy + dj;
+            if (ci < 0 || cj < 0 || ci >= nelx || cj >= nely || p.mask[ci * nely + (nely - 1 - cj)] === 0) continue;
+            const dx = Math.max(ci * h - x, 0, x - (ci + 1) * h), dy = Math.max(cj * h - y, 0, y - (cj + 1) * h), d = dx * dx + dy * dy;
+            if (d < best) { best = d; iu = ci; ju = cj; }
+          }
+          if (best === Infinity) throw new Error(`barra ${bar.label ?? k}: trecho fora da geometria em (${(x + origin.x).toFixed(3)}, ${(y + origin.y).toFixed(3)}); refine a malha (elemento menor)`);
+          projected++;
+        }
+        const e = iu * nely + (nely - 1 - ju);
+        const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+        const xi = clamp(2 * (x - iu * h) / h - 1), eta = clamp(2 * (y - ju * h) / h - 1);
         const g = new Float64Array(8);
         for (let a = 0; a < 4; a++) {
           const dnx = (XI[a] * (1 + ETA[a] * eta)) / (2 * h), dny = (ETA[a] * (1 + XI[a] * xi)) / (2 * h);
@@ -216,6 +233,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       }
     }
   });
+
+  const notes: string[] = projected ? [`${projected} trechos de barra caíram em elementos vazios (malha grossa) e foram ligados ao elemento de concreto vizinho; refine a malha para mais precisão.`] : [];
 
   // posição de cada amostra de força, na mesma ordem em que `assemble` empilha as forças de cada barra
   const nodeXY = (n: number): [number, number] => [origin.x + Math.floor(n / (nely + 1)) * h, origin.y + (nely - (n % (nely + 1))) * h];
@@ -413,7 +432,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
     lamGood = lamTry; uGood = eq.u; asmGood = eq.asm;
     steps.push({ lambda: lamGood, its: eq.its, rel: eq.rel });
-    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood) };
+    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes };
     if (lamGood >= lamMax) { mode = "lambdaMax"; break; }
     if (!everFailed && eq.its <= 6) dl *= 1.5;
   }
@@ -440,7 +459,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     maxCompStrain: asmGood.maxEpsC,
     equilibrium: { x: eqx, y: eqy },
     steps, barForces: asmGood.barForces, reaction,
-    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood),
+    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes,
   };
 }
 

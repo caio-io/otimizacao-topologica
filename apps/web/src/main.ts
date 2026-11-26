@@ -822,6 +822,7 @@ $("nl").onclick = () => {
   if ($("nl").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
   readNl(); localStorage.setItem("stm-scene", JSON.stringify(scene));
   frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; $("nlOut").innerHTML = "";
+  if (scene.bars?.length && scene.h > 0.05) showMsg([], [`Malha grossa (elemento de ${scene.h} m): a capacidade costuma ser SUPERESTIMADA (na S1, 0,1 m dá cerca de 50 % a mais que 0,04 m). Use 0,04 m ou menos para um resultado confiável.`]);
   $("nl").textContent = "Parar";
   send({ mode: "nl", scene });
 };

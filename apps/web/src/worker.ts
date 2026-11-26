@@ -71,7 +71,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
         const g = gen.next();
         if (!g.done) {
           const st = g.value; last = st; count++;
-          post({ ...base, iter: count, u: st.u, reactions: [], residual: { x: 0, y: 0 }, done: false, warnings: first ? r.warnings : [],
+          post({ ...base, iter: count, u: st.u, reactions: [], residual: { x: 0, y: 0 }, done: false, warnings: first ? [...r.warnings, ...st.notes] : [],
             nl: { lambda: st.lambda, mode: null, epsComp: st.epsComp, epsTens: st.epsTens, barSamples: st.barSamples, bars: [], maxEpsC: st.maxEpsC, crushStrain: st.crushStrain,
               epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: { x: 0, y: 0 } } });
           first = false;
