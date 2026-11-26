@@ -61,9 +61,8 @@ npm run build              # arquivos estáticos em apps/web/dist
 
 | Ramo | Conteúdo |
 |---|---|
-| `main` | Versão publicada: viga-parede e viga-parede com abertura (editor, BESO/SIMP, reações). |
-| `dev` | Tudo de `main` + cargas distribuídas, largura de biela, CSFM linear, BESO robusto. |
-| **`csfm`** | Tudo de `dev` + elemento **QM6**, índices de avaliação (**TRS/SR**), **análise não linear (Nível 2)**, calibrações e roteiro do CSFM. **Comece por aqui.** |
+| `main` / `dev` | Versão estável (hoje os dois apontam para o mesmo commit): editor de geometria, BESO/SIMP, reações, cargas distribuídas, largura de biela, CSFM linear e BESO com proteção de conectividade. |
+| **`csfm`** | Tudo de `main` + elemento **QM6**, índices de avaliação (**TRS/SR**), **análise não linear (Nível 2)**, calibrações e roteiro do CSFM. **Comece por aqui.** |
 
 ## 🧪 Validação
 
