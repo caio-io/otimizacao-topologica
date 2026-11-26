@@ -42,6 +42,34 @@ export interface SupportSpec {
   uy: boolean;
 }
 
+/** barra de armadura (análise não linear): poligonal embutida no concreto, aderência perfeita */
+export interface BarSpec {
+  id: string;
+  label: string;
+  /** poligonal em coordenadas da cena [m]; precisa ficar dentro da geometria */
+  path: [number, number][];
+  /** polilinhas adicionais do mesmo grupo (mesma área e aço): estribos, barras repetidas */
+  extra?: [number, number][][];
+  /** área TOTAL da armadura da barra [cm²] (já somadas as barras ao longo da espessura) */
+  areaCm2: number;
+  /** classe do aço: CA-50 / CA-60 (valores de projeto, definidos em `STEEL_CLASSES`) ou "custom" (valores abaixo, p. ex. medidos em ensaio) */
+  steelClass?: "CA50" | "CA60" | "custom";
+  /** escoamento e resistência à tração [MPa], módulo [GPa], deformação de ruptura (fração) */
+  fy: number; ft: number; Es: number; epsU: number;
+}
+
+/** parâmetros da análise não linear (Nível 2) */
+export interface NlParams {
+  /** "mean": fc = fck, sem coeficientes (valores médios de ensaio) · "design": fc = 0,85·fck/γc (NBR 6118) */
+  values: "mean" | "design";
+  /** deformação última do concreto na compressão (fração; 0,0035) */
+  epsCu: number;
+  /** comprimento de esmagamento [m]: critério sobre a deformação MÉDIA nessa janela; 0 = valor pontual */
+  crushLength: number;
+  /** norma (perfil de parâmetros de projeto, ver `codes.ts`); padrão NBR 6118 */
+  code?: "NBR6118" | "EC2" | "MC2010" | "ACI318";
+}
+
 export interface Scene {
   /** tamanho do elemento finito [m] — resolução da malha */
   h: number;
@@ -56,6 +84,10 @@ export interface Scene {
   shapes: Shape[];
   loads: LoadSpec[];
   supports: SupportSpec[];
+  /** armadura (só para a análise não linear) */
+  bars?: BarSpec[];
+  /** parâmetros da análise não linear */
+  nl?: NlParams;
 }
 
 export type SupportKind = "fixo" | "movel-x" | "movel-y";

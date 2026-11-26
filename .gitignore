@@ -7,3 +7,6 @@ src2/*.pdf
 
 # modelos/testes só para desenvolvimento interno
 *.local.*
+
+# PDFs licenciados (fib) e material de planejamento externo
+src-fib/*.pdf

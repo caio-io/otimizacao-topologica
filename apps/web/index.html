@@ -41,6 +41,12 @@
     tr.tirante td { color: #a93226; } tr.biela td { color: #1a4f9c; } tr.nula td { color: #8a8f98; }
     #stm .warn { background: #fff4d6; color: #6b4e00; padding: 4px 8px; border-radius: 4px; }
     button:disabled { opacity: .45; cursor: not-allowed; }
+    #tip { position: fixed; z-index: 20; display: none; pointer-events: none; max-width: 300px; padding: 6px 9px; border-radius: 5px;
+           background: rgba(28,36,48,.94); color: #f3f5f8; font: 12px/1.45 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+    #tip b { color: #ffd479; } #tip .k { color: #9fb0c3; }
+    .barrow { display: grid; grid-template-columns: 1.5fr 1.1fr 0.9fr 0.9fr; gap: 3px 6px; align-items: center; }
+    .barrow.hl small { font-weight: 700; color: #1f5fbf; }
+    .barrow select, .barrow input { margin-top: 0; font-size: 12px; padding: 1px 2px; }
   </style>
 </head>
 <body>
@@ -49,6 +55,7 @@
     <label>Exemplo
       <select id="preset"></select>
     </label>
+    <small id="presetNote" class="note"></small>
 
     <h2>Geometria, apoios e cargas</h2>
     <label title="Lado de cada elemento finito da malha. Menor = mais detalhe, porém mais lento (limite de 20 000 elementos).">Tamanho do elemento (m) — resolução
@@ -84,6 +91,22 @@
     <button id="run" class="primary" style="margin-top:6px">Otimizar</button>
     <div class="grid2" style="margin-top:6px"><button id="clearRes">Limpar resultados</button><button id="clearAll">Limpar tudo</button></div>
 
+    <h2>Análise não linear (Nível 2)</h2>
+    <small class="note">Concreto <b>sem tração</b> + barras de aço com <b>aderência perfeita</b> (fissuras girantes, parábola-retângulo). Dá a carga última, o modo de ruptura e a força nas barras. <i>Não é a verificação CSFM completa</i>: sem redução por deformação transversal (kc2), sem tension stiffening e sem ELS.</small>
+    <label title="Valores médios: fc = fck, sem coeficientes (comparação com ensaios). De projeto: fc = 0,85·fck/γc, γc = 1,4 (NBR 6118).">Resistências do concreto
+      <select id="nlValues"><option value="mean">Médias (fc = fck, sem coeficientes)</option><option value="design">De projeto (fcd da norma escolhida)</option></select>
+    </label>
+    <label title="Perfil de parâmetros de projeto: γc, αcc, εc2, εcu. Trocar a norma atualiza εcu; os valores podem ser editados em seguida. Veja o que está verificado em docs/csfm-roteiro.md (cada perfil declara o que ainda está pendente).">Norma
+      <select id="nlCode"><option value="NBR6118">NBR 6118 (γc 1,4 · αcc 0,85)</option><option value="EC2">Eurocode 2 (provisório)</option><option value="MC2010">fib Model Code 2010 (provisório)</option><option value="ACI318">ACI 318 (provisório)</option></select>
+    </label>
+    <div class="grid2">
+      <label title="Deformação de compressão em que o concreto esmaga (0,0035 = 3,5 ‰).">εcu (‰)<input id="nlEpsCu" type="number" step="0.1" min="1" value="3.5" /></label>
+      <label title="O critério de esmagamento usa a deformação MÉDIA numa janela desse comprimento (o livro do CSFM recomenda algo entre a profundidade da zona comprimida e a espessura). 0 = valor em cada ponto (muito sensível à malha).">Comprimento de esmagamento (m)<input id="nlCrush" type="number" step="0.01" min="0" value="0.26" /></label>
+    </div>
+    <div id="barsList"></div>
+    <button id="nl" class="primary" style="margin-top:6px" title="Análise não linear incremental com controle de carga; mostra a evolução passo a passo.">Rodar análise não linear</button>
+    <div id="nlOut" class="note"></div>
+
     <h2>Visualização</h2>
     <select id="view">
       <option value="topo" selected>Topologia + trajetórias</option>
@@ -91,6 +114,9 @@
       <option value="csfm">CSFM: zonas tracionadas</option>
       <option value="s1">Mapa σ1 (tração)</option>
       <option value="s2">Mapa σ2 (compressão)</option>
+      <option value="nlconc">Nível 2: deformação do concreto</option>
+      <option value="nlcrack">Nível 2: fissuração e armadura</option>
+      <option value="nlstress">Nível 2: tensões do concreto</option>
     </select>
     <label class="chk"><input id="showMesh" type="checkbox" /> Mostrar malha de elementos finitos</label>
     <label>Iteração (histórico) <input id="frame" type="range" min="0" max="0" value="0" /></label>
@@ -106,6 +132,7 @@
       <div id="msg"></div>
     </div>
   </main>
+  <div id="tip"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
