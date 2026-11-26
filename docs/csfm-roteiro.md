@@ -116,3 +116,24 @@ Geometria lida da Fig. 6 (viga 10 × 7 m, t = 0,20 m, E = 28,567 GPa, ν = 0,15;
 - **Conferem:** o conjunto de posições que não altera o aço (4, 5, 7, 8, 9, com variação < 0,5 %) e o conjunto das que alteram (1, 2, 3, 6). Com rmin = 3 as duas piores são as mesmas do artigo (6 e 2).
 - **Não conferem:** a magnitude é ≈ 40 % (rmin = 2) a 70 % (rmin = 3) da publicada; a ordem entre 1 e 3 troca com rmin = 3 (artigo: 3 > 1); com rmin = 2, 2 e 6 ficam empatadas (artigo: 6 > 2). O aço da peça maciça fica 8 % abaixo.
 - **Limites desta comparação:** o SIMP parou em 10–13 iterações para a peça maciça e nas posições sem efeito (tolerância 0,01), podendo estar pouco convergido; a métrica de aço é diferente da do artigo; placas no lugar de cargas pontuais; malha e filtro diferentes. Não varri a tolerância nem a malha.
+
+### Refinamento da calibração do Queiroz & Leonel (convergência, filtro, malha, métrica)
+Código: `test/calibracao.queiroz2.test.ts` (`CALIBRACAO2=a` ou `b`) e `test/helpers/queiroz.ts` (cena). Variação do aço (critério de Xia, σ1 > −5·σ2) em relação à viga maciça; artigo entre parênteses.
+
+**A — h = 0,125 m (4480 el.), tolerância 0,001 e até 300 iterações:**
+| Pos. | Artigo | filtro 2 el. (0,25 m) | filtro 3 el. (0,375 m) | filtro 4 el. (0,5 m) |
+|---|---|---|---|---|
+| 6 | +26,8 % | +10,1 % | +20,3 % | +18,7 % |
+| 2 | +23,5 % | +11,1 % | +12,8 % | +12,2 % |
+| 3 | +14,8 % | +7,3 % | +6,3 % | +5,2 % |
+| 1 | +11,0 % | +2,5 % | +4,1 % | +4,3 % |
+| 4, 5, 7, 8, 9 | 0 a +0,3 % | −0,1 a +0,4 % | −0,5 a −0,1 % | −0,4 a 0 % |
+
+**B — h = 0,0625 m (17 920 el.), filtro 6 el. (0,375 m), tolerância 0,002:** pos. 6 +22,8 %, pos. 2 +13,9 %, pos. 1 +7,6 %, pos. 3 +7,1 %.
+
+- **Ordem:** com filtro de 3 e 4 elementos (malha grossa) sai 6 > 2 > 3 > 1, igual ao artigo; com malha fina, 6 > 2 > 1 ≈ 3 (empate). Com filtro de 2, 2 passa à frente de 6.
+- **Magnitude:** melhora com filtro maior e com malha fina — pos. 6 chega a 76–85 % do publicado, pos. 2 a 52–59 %, pos. 1 a 37–69 %, pos. 3 a 35–48 %. Segue **abaixo** do artigo.
+- **Aço da maciça:** 811–814 cm³ em todas as malhas, contra 888 do artigo (−8 %): independente da malha, logo é diferença de métrica/modelo, não de discretização.
+- **Métrica:** contar toda tração (σ1 > 0) não serve — dá −12,7 % a +10,4 % nas posições que o artigo diz inalteradas (4, 5, 7, 8, 9) e +51 % na pos. 6 em malha fina. O critério de Xia (σ1 > −5σ2) dá ±0,5 % nessas posições e é o adotado.
+- **Alerta:** a fração de elementos cinza (0,1 < ρ < 0,9) cresce de 9 % (filtro 2) para 20–31 % (filtros 3–4) e 15–24 % em malha fina; a binarização em 0,5 passa a influenciar o resultado. Convergência exigiu 14–180 iterações.
+- **Ainda não explicado:** por que a magnitude fica abaixo do artigo. Candidatos: o artigo soma As·L de um modelo de bielas e tirantes simplificado (tirantes esbeltos e concentrados) em vez de integrar a tensão no contínuo; elementos T3 e cargas pontuais; filtro e threshold desconhecidos.

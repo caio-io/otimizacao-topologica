@@ -153,14 +153,14 @@ export function xiaIndices(p: Problem, solid: Uint8Array, opts: { fy?: number; r
  * cada tirante recebe As = F/fyd com F = σ1 médio × área do tirante, logo V = ∫σ1 dV / fyd nas regiões tracionadas
  * (σ1 > 0 e σ1 > −5·σ2, como em Xia et al.). `fyd` em kN/m² (CA-50: 43,5 kN/cm² = 435 000 kN/m²).
  */
-export function steelVolume(p: Problem, solid: Uint8Array, fyd = 435e3): number {
+export function steelVolume(p: Problem, solid: Uint8Array, fyd = 435e3, ratio = 5): number {
   const nel = p.nelx * p.nely;
   const E = Float64Array.from({ length: nel }, (_, e) => (solid[e] && p.mask[e] !== 0 ? 1 : EVOID));
   const S = stressesFor(p, E);
   let v = 0;
   for (let e = 0; e < nel; e++) {
     if (!solid[e] || p.mask[e] === 0) continue;
-    if (S.s1[e] > 0 && S.s1[e] > -5 * S.s2[e]) v += S.s1[e] / fyd;
+    if (S.s1[e] > 0 && S.s1[e] > -ratio * S.s2[e]) v += S.s1[e] / fyd;
   }
   return v * p.h * p.h * p.t * 1e6; // m³ → cm³
 }
