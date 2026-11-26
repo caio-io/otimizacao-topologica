@@ -40,6 +40,45 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     expect(r.equilibrium.x).toBeLessThan(1e-3);
   });
 
+
+  it("T2b barra embutida horizontal (mesma posição do T2): mesma carga última do tirante", () => {
+    const nelx = 10, nely = 2, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * (0 * (nely + 1) + j), 2 * (0 * (nely + 1) + j) + 1);
+    p.loads.push({ node: nelx * (nely + 1) + 1, fx: 1, fy: 0 });
+    const area = 1e-3;
+    const r = solveNonlinear(p, { concrete: nbrConcrete(30), bars: [{ x0: 0, y0: 0, x1: 0, y1: 0, path: [[0, 0.05], [0.5, 0.05]], area, steel: ca50, label: "embutida" }], dLambda: 50 });
+    const Nu = area * ca50.ft;
+    console.log(`T2b: λu=${r.lambda.toFixed(1)} kN  As·ft=${Nu.toFixed(1)} kN  modo=${r.mode}  ε=${(r.bars[0].strainMax * 100).toFixed(2)} %`);
+    expect(r.lambda / Nu).toBeGreaterThan(0.98);
+    expect(r.lambda / Nu).toBeLessThan(1.001);
+  });
+
+  it("T2d barra embutida inclinada (60°) em bloco comprimido: força axial elástica = teoria; no limite o aço soma carga", () => {
+    const nelx = 8, nely = 8, h = 0.05;
+    const mk = () => {
+      const p = block(nelx, nely, h);
+      // topo e base sem deslocamento horizontal: sem isso a barra inclinada (inextensível) deixa o bloco cisalhar e não trabalha
+      for (let i = 0; i <= nelx; i++) p.fixed.push(2 * (i * (nely + 1) + nely) + 1, 2 * (i * (nely + 1) + nely), 2 * (i * (nely + 1)));
+      for (let i = 0; i <= nelx; i++) p.loads.push({ node: i * (nely + 1), fx: 0, fy: -(i === 0 || i === nelx ? 0.5 : 1) / nelx });
+      return p;
+    };
+    const area = 1e-3, th = Math.PI / 3, c = nbrConcrete(30), s = Math.sin(th);
+    const bar = { x0: 0, y0: 0, x1: 0, y1: 0, path: [[0.0, 0.0], [0.4 / Math.tan(th), 0.4]] as [number, number][], area, steel: ca50, label: "inclinada" };
+    const A = nelx * h * 0.3, E0 = (2 * c.fc) / c.eps0;
+    // (a) regime elástico (λ = 20 kN): εy = −λ/(E0·A + As·Es·sen³θ); N = As·Es·sen²θ·εy
+    const r1 = solveNonlinear(mk(), { concrete: c, bars: [bar], dLambda: 20, lambdaMax: 20 });
+    const ey = -20 / (E0 * A + area * ca50.Es * s ** 3), Nth = area * ca50.Es * s * s * ey;
+    const sorted = Array.from(r1.barForces[0]).sort((a, b) => a - b), Nfe = sorted[Math.floor(sorted.length / 2)]; // mediana: os trechos de ponta sofrem efeito de borda
+    console.log(`T2d (a): N mediano FE=${Nfe.toFixed(3)} kN  teoria=${Nth.toFixed(3)} kN`);
+    expect(Math.abs(Nfe / Nth - 1)).toBeLessThan(0.05); // a barra rígida perturba o campo (não é exatamente uniforme); erros de orientação/área dariam 30 % ou mais
+    // (b) até o limite: o aço soma à resistência do concreto (patamar), com compressão na barra
+    const r2 = solveNonlinear(mk(), { concrete: c, bars: [bar], dLambda: 100 });
+    console.log(`T2d (b): λu=${r2.lambda.toFixed(1)} kN  fc·A=${(c.fc * A).toFixed(1)} kN  modo=${r2.mode}  N barra=${r2.bars[0].axialMax.toFixed(1)} kN`);
+    expect(r2.lambda).toBeGreaterThan(0.99 * c.fc * A);
+    expect(r2.bars[0].axialMax).toBeGreaterThan(100);
+  });
+
   it("T3 viga-parede com tirante: tirante escoa, equilíbrio de seção consistente (braço de alavanca cabe na altura) e capacidade ≥ MBT", () => {
     const h = 0.05;
     const s = base(h, 0.4);

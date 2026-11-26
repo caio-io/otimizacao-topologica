@@ -155,3 +155,28 @@ Código: `test/calibracao.queiroz2.test.ts` (`CALIBRACAO2=a` ou `b`) e `test/hel
 **Sobre o T3:** o MBT com braço entre eixos das placas (1,0 m) dá 1505 kN; o FE dá 1986 kN (+32 %). Diagnóstico pelas reações do próprio FE: o centroide da reação vai para a borda interna da placa (0,371 m, não 0,2 m), encurtando o braço para ≈ 0,83 m. O braço de alavanca implícito (1,32 m) cabe na altura útil, então o resultado é fisicamente consistente; a estimativa do MBT é que estava geometricamente grosseira. A reação esquerda (995 kN) difere 0,2 % de P/2 (apoio direito móvel); o equilíbrio vertical global fecha em 1e-6. O T3 leva ≈ 65 s.
 
 **Limitações conhecidas:** aderência perfeita; sem kc2; sem tension stiffening; sem elementos de aderência/ancoragem; a rigidez inicial do concreto é a da parábola (2·fc/ε0), não o Ec; ν = 0 nas direções principais; a convergência perto do patamar do concreto é lenta e o fim por "divergência" é tratado como CC quando ε ≥ 0,95·ε0; não validado ainda contra os ensaios do capítulo 6 do livro nem contra o Queiroz & Leonel.
+
+## Nível 2 — extensões e a cabeça de pilar S1 (livro do CSFM, cap. 6.5)
+**Extensões do solver (`nonlinear.ts`):**
+- **Barras embutidas** (`Bar.path`): poligonal em qualquer direção, aderência perfeita, sem GDLs próprios; a deformação axial da barra é a do concreto na direção dela (`ε = g·u_e`), avaliada em trechos de h/4. Teste: força axial elástica de uma barra a 60° dentro de 3,4 % da teoria; mesma carga última do tirante sobre linha da malha.
+- **Rigidez tangente** (padrão; `tangent: false` volta à secante): módulos tangentes nas direções principais com piso de 1e-3·E0, cisalhamento secante, barras com encruamento; resíduo final ≈ 1e-8 contra 1e-4.
+- **Comprimento de esmagamento** (`crushLength`): o critério `|ε3| ≥ εcu` passa a usar a deformação de compressão **média** numa janela desse comprimento, como pede o livro, em vez do valor pontual.
+- Resultados T1–T3 mantidos (T3: Pu = 2086 kN, ruptura do aço, braço implícito M/T = 1,35 m).
+
+**Modelo da S1** (`test/helpers/s1.ts`, `test/calibracao.s1.test.ts`, `CALIBRACAO=1`): largura 1,20 m, altura 0,98 m (base 0,16 + flare 0,32 + pilar 0,50), espessura 2·lb = 0,26 m, 4 apoios (2 no plano) de 0,13 m em x = 0,14 e 1,06 m fixos nas duas direções, carga distribuída no topo em 0,48 m (largura lida da Fig. 6.23), concreto `fc = 31,2 MPa` sem coeficientes (valores médios), As1 = 9Ø10 em U com pernas a 0,16–0,60 m (fy 620, ft 670 MPa), 6 camadas Ah = 4Ø4 a cada 75 mm (fy 605, ft 653 MPa), Es = 200 GPa, εu = 5 %. **Geometria da armadura lida das figuras (aproximada).** Carga por apoio = P/4. Ensaio: 556 kN; CSFM do livro: M0 629, M1 (malha 20) 610, M2 (sem TS) 609, M3 (εcu 2 ‰) 568.
+
+| Critério de esmagamento | malha 40 mm | malha 20 mm | malha 10 mm |
+|---|---|---|---|
+| pontual, 3,5 ‰ | — | 277 kN | — |
+| pontual, 2,0 ‰ | — | 200 kN | — |
+| pontual, 5 % (parada padrão do CSFM) | 608 | 512 | 497 |
+| média em 0,13 m, 3,5 ‰ | 591 | 488 | — |
+| média em 0,13 m, 2,0 ‰ | 554 | 457 | — |
+| **média em 0,26 m (= espessura), 3,5 ‰** | **608** | **550** | — |
+| média em 0,26 m, 2,0 ‰ | 588 | 525 | — |
+| sem critério (só divergência) | — | 579 (εc,máx = 610 ‰, 424 s) | — |
+
+- **Critério pontual não serve:** para na carga de 277 kN (3,5 ‰) ou 200 kN (2,0 ‰) por picos nos cantos das placas, com o aço quase sem tensão.
+- **Média sobre o comprimento = espessura (0,26 m, a recomendação do livro) dá 550–608 kN**, no intervalo do ensaio (556) e do CSFM (568–629), mas **cai ≈ 10 % ao refinar de 40 para 20 mm** (o livro relata ≈ 3 % entre as suas malhas). O resultado ainda depende da malha e do comprimento de esmagamento.
+- O aço principal **não chega a escoar** no nosso modelo (373 kN contra 438 kN de escoamento na melhor corrida); no ensaio o modo foi CC + FY.
+- **Limites:** sem kc2 nem tension stiffening; geometria e posição das barras lidas de figuras; placa de carga de 0,48 m e espessura 2·lb assumidas; só S1 (S2–S5 não rodadas); malha de 10 mm só com o critério pontual (45 min).

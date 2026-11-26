@@ -45,6 +45,12 @@ export interface Bar {
   area: number;
   steel: SteelLaw;
   label?: string;
+  /**
+   * Poligonal da barra em coordenadas da cena. Se existir, a barra é EMBUTIDA (aderência perfeita, qualquer direção,
+   * sem GDLs próprios): a deformação axial da barra é a do concreto na sua direção, avaliada em trechos de h/4.
+   * Sem `path`, a barra tem de ser horizontal/vertical sobre linhas da malha (elementos de treliça).
+   */
+  path?: [number, number][];
 }
 
 export interface NlOptions {
@@ -54,12 +60,20 @@ export interface NlOptions {
   origin?: { x: number; y: number };
   /** verifica |ε3| ≥ epsu no concreto como critério de ruptura (padrão: sim) */
   checkCrushing?: boolean;
+  /**
+   * comprimento de esmagamento [m]: se informado, o critério |ε3| ≥ epsu usa a deformação de compressão MÉDIA numa janela
+   * desse comprimento (como recomenda o livro do CSFM), em vez do valor em cada ponto — evita parada precoce por picos
+   * locais sob placas (dependência de malha).
+   */
+  crushLength?: number;
   /** passo inicial de carga, em múltiplos da carga de referência (padrão 0,1) */
   dLambda?: number;
   /** carga máxima, em múltiplos da carga de referência (padrão 1e4) */
   lambdaMax?: number;
   /** tolerância do resíduo relativo (padrão 1e-4) */
   tol?: number;
+  /** usa a rigidez tangente (com piso) no lugar da secante; converge bem mais perto do patamar (padrão: sim) */
+  tangent?: boolean;
   maxIt?: number;
 }
 
@@ -101,6 +115,30 @@ function steelSigma(s: SteelLaw, eps: number) {
   return sg * (s.fy + Esh * (Math.min(a, s.epsU) - ey));
 }
 
+
+/** maior média de `v` (campo por elemento nelx×nely, índice i*nely+j) numa janela quadrada de raio R elementos */
+function windowMax(v: Float64Array, nelx: number, nely: number, R: number): number {
+  if (R <= 0) return v.reduce((m, x) => Math.max(m, x), 0);
+  const W = nelx + 1, H = nely + 1, S = new Float64Array(W * H); // soma acumulada
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) S[(i + 1) * H + (j + 1)] = v[i * nely + j] + S[i * H + (j + 1)] + S[(i + 1) * H + j] - S[i * H + j];
+  let best = 0;
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+    if (v[i * nely + j] === 0) continue;
+    // janela fixa (2R+1)² deslocada para caber na malha, dividida pela área inteira (elementos vazios contam zero)
+    const i0 = Math.max(0, Math.min(nelx - (2 * R + 1), i - R)), j0 = Math.max(0, Math.min(nely - (2 * R + 1), j - R));
+    const i1 = Math.min(nelx, i0 + 2 * R + 1), j1 = Math.min(nely, j0 + 2 * R + 1);
+    const sum = S[i1 * H + j1] - S[i0 * H + j1] - S[i1 * H + j0] + S[i0 * H + j0];
+    best = Math.max(best, sum / ((2 * R + 1) * (2 * R + 1)));
+  }
+  return best;
+}
+
+function steelTangent(s: SteelLaw, eps: number) {
+  const ey = s.fy / s.Es;
+  if (Math.abs(eps) <= ey) return s.Es;
+  return Math.max((s.ft - s.fy) / (s.epsU - ey), 1e-3 * s.Es);
+}
+
 export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
   const { nelx, nely, h, t } = p;
   const m = buildModel(p);
@@ -110,11 +148,14 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
   const tol = opt.tol ?? 1e-4, maxIt = opt.maxIt ?? 150;
   const check = opt.checkCrushing ?? true;
   const E0 = (2 * c.fc) / c.eps0, Ecr = 1e-4 * E0;
+  const useTan = opt.tangent ?? true;
+  const Efloor = 1e-3 * E0;
 
   // ---- barras → elementos de treliça sobre arestas da malha
   const nodeId = (i: number, j: number) => i * (nely + 1) + j;
   const barEls: BarEl[] = [];
   bars.forEach((bar, k) => {
+    if (bar.path) return;
     const ci = (x: number) => Math.round((x - origin.x) / h), cj = (y: number) => nely - Math.round((y - origin.y) / h);
     const i0 = ci(bar.x0), i1 = ci(bar.x1), j0 = cj(bar.y0), j1 = cj(bar.y1);
     const onGrid = Math.abs(origin.x + i0 * h - bar.x0) < 1e-6 && Math.abs(origin.x + i1 * h - bar.x1) < 1e-6
@@ -126,6 +167,34 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
     } else {
       const [a, b] = j0 > j1 ? [j0, j1] : [j1, j0]; // j cresce para baixo: de baixo (j grande) para cima
       for (let j = a; j > b; j--) barEls.push({ a: nodeId(i0, j), b: nodeId(i0, j - 1), cx: 0, cy: 1, bar: k });
+    }
+  });
+
+  // ---- barras embutidas: trechos de ~h/4 com o vetor g (ε_axial = g·u_e) do elemento que contém o ponto médio
+  interface Piece { e: number; g: Float64Array; len: number; bar: number }
+  const pieces: Piece[] = [];
+  bars.forEach((bar, k) => {
+    if (!bar.path) return;
+    for (let q = 0; q + 1 < bar.path.length; q++) {
+      const [xa, ya] = bar.path[q], [xb, yb] = bar.path[q + 1];
+      const L = Math.hypot(xb - xa, yb - ya);
+      if (L < 1e-9) continue;
+      const n = Math.max(1, Math.ceil(L / (h / 4))), len = L / n, cs = (xb - xa) / L, sn = (yb - ya) / L;
+      const m0 = cs * cs, m1 = sn * sn, m2 = cs * sn;
+      for (let r = 0; r < n; r++) {
+        const x = xa + ((r + 0.5) / n) * (xb - xa) - origin.x, y = ya + ((r + 0.5) / n) * (yb - ya) - origin.y;
+        const ie = Math.min(nelx - 1, Math.max(0, Math.floor(x / h))), jy = Math.min(nely - 1, Math.max(0, Math.floor(y / h)));
+        const je = nely - 1 - jy, e = ie * nely + je;
+        if (p.mask[e] === 0) throw new Error(`barra ${bar.label ?? k}: trecho fora da geometria em (${(x + origin.x).toFixed(3)}, ${(y + origin.y).toFixed(3)})`);
+        const xi = 2 * (x - ie * h) / h - 1, eta = 2 * (y - jy * h) / h - 1;
+        const g = new Float64Array(8);
+        for (let a = 0; a < 4; a++) {
+          const dnx = (XI[a] * (1 + ETA[a] * eta)) / (2 * h), dny = (ETA[a] * (1 + XI[a] * xi)) / (2 * h);
+          g[2 * a] = m0 * dnx + m2 * dny;
+          g[2 * a + 1] = m1 * dny + m2 * dnx;
+        }
+        pieces.push({ e, g, len, bar: k });
+      }
     }
   });
 
@@ -150,12 +219,13 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
     }
   }
 
-  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
+  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
 
   const assemble = (u: Float64Array): Asm => {
     const L = new Float64Array(ndof * w);
     const fint = new Float64Array(ndof);
     let maxEpsC = 0;
+    const epsEl = new Float64Array(nelx * nely);
     const ue = new Float64Array(8), Ke = new Float64Array(64), B = new Float64Array(24), DB = new Float64Array(24), fe = new Float64Array(8);
     for (let e = 0; e < nelx * nely; e++) {
       if (p.mask[e] === 0) continue;
@@ -179,9 +249,14 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
         else {
           if (e1 < 0) { s1 = -concreteSigma(c, -e1); E1 = s1 / e1; }
           if (e3 < 0) { s3 = -concreteSigma(c, -e3); E3 = s3 / e3; }
-          if (e3 < 0) maxEpsC = Math.max(maxEpsC, -e3);
+          if (e3 < 0) { maxEpsC = Math.max(maxEpsC, -e3); epsEl[e] += -e3 / 4; }
         }
         const G = rad > 1e-12 ? (s1 - s3) / (2 * (e1 - e3)) : 0.25 * (E1 + E3);
+        if (useTan && !fresh) {
+          // módulos tangentes nas direções principais (piso para manter a matriz definida positiva)
+          if (e1 < 0) E1 = Math.max(Efloor, -e1 < c.eps0 ? E0 * (1 + e1 / c.eps0) : 0);
+          if (e3 < 0) E3 = Math.max(Efloor, -e3 < c.eps0 ? E0 * (1 + e3 / c.eps0) : 0);
+        }
         const Gs = Math.max(G, 1e-6 * E0);
         // σ global (coaxial) e D secante = Tεᵀ·diag(E1,E3,G)·Tε
         const sx = s1 * cs * cs + s3 * sn * sn, sy = s1 * sn * sn + s3 * cs * cs, tx = (s1 - s3) * sn * cs;
@@ -221,7 +296,7 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
       const da = [2 * be.a, 2 * be.a + 1, 2 * be.b, 2 * be.b + 1];
       const eps = ((u[da[2]] - u[da[0]]) * be.cx + (u[da[3]] - u[da[1]]) * be.cy) / h;
       const sg = steelSigma(s, eps);
-      const Esec = Math.abs(eps) > 1e-12 ? Math.max(sg / eps, 1e-3 * s.Es) : s.Es;
+      const Esec = useTan ? steelTangent(s, eps) : Math.abs(eps) > 1e-12 ? Math.max(sg / eps, 1e-3 * s.Es) : s.Es;
       const k = (bar.area * Esec) / h, N = bar.area * sg;
       perBar[be.bar].push(N);
       barEps[be.bar] = Math.max(barEps[be.bar], Math.abs(eps));
@@ -236,8 +311,29 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
         }
       }
     }
+    for (const pc of pieces) {
+      const bar = bars[pc.bar], st = bar.steel, b0 = pc.e * 8;
+      let eps = 0;
+      for (let a = 0; a < 8; a++) eps += pc.g[a] * u[edof[b0 + a]];
+      const sg = steelSigma(st, eps);
+      const Esec = useTan ? steelTangent(st, eps) : Math.abs(eps) > 1e-12 ? Math.max(sg / eps, 1e-3 * st.Es) : st.Es;
+      const N = bar.area * sg, kk = bar.area * Esec * pc.len;
+      perBar[pc.bar].push(N);
+      barEps[pc.bar] = Math.max(barEps[pc.bar], Math.abs(eps));
+      if (Math.abs(eps) > st.fy / st.Es) yielded[pc.bar] = true;
+      for (let a = 0; a < 8; a++) {
+        const i = edof[b0 + a];
+        fint[i] += N * pc.len * pc.g[a];
+        if (fixedEff[i]) continue;
+        for (let q = 0; q < 8; q++) {
+          const j = edof[b0 + q];
+          if (j > i || fixedEff[j]) continue;
+          L[i * w + (bw - (i - j))] += kk * pc.g[a] * pc.g[q];
+        }
+      }
+    }
     perBar.forEach((arr, k) => { barForces[k] = Float64Array.from(arr); });
-    return { L, fint, maxEpsC, barForces, barEps, yielded };
+    return { L, fint, maxEpsC, epsEl, barForces, barEps, yielded };
   };
 
   // ---- equilíbrio em um nível de carga: correção pelo resíduo com rigidez secante
@@ -275,7 +371,8 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
     const eq = equilibrate(lamTry, uGood);
     let failMode: NlMode | null = null;
     // classifica pelo estado (convergido ou última iteração): ruptura do aço, esmagamento ou divergência pura
-    if (check && eq.asm.maxEpsC >= c.epsu) failMode = "CC";
+    const epsCheck = opt.crushLength ? windowMax(eq.asm.epsEl, nelx, nely, Math.max(0, Math.round(opt.crushLength / (2 * h)))) : eq.asm.maxEpsC;
+    if (check && epsCheck >= c.epsu) failMode = "CC";
     for (let k = 0; k < bars.length; k++) if (eq.asm.barEps[k] >= bars[k].steel.epsU) failMode = "FR";
     // sem convergência: se o concreto chegou ao patamar (≥ 0,95·ε0) é esgotamento da resistência do concreto (CC),
     // como no livro (Tab. 4.5: "divergência por resistência do concreto atingida"); caso contrário, divergência pura
