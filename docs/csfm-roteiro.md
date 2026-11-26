@@ -247,3 +247,15 @@ Verificado no PDF (páginas impressas; o PDF tem 8 páginas a mais que a numera�
 
 - **Tension stiffening simplificado** (opção `tensionStiffening`: fct, ρeff; modelo da corda tracionada, Kaufmann et al., 2020, p. 20, só até o escoamento; depois, deslocamento de Δ/Es, aproximação nossa). S1, ρeff = 0,5 / 1 / 2 %: 40 mm 624/622/618 kN (sem TS: 615), 30 mm 593/590/587 (583), 20 mm 549/546/543 (539). Efeito < 2 %, queda 40→20 mm continua ≈ 12 %: **o TS não explica a dependência de malha**, como o livro (p. 140) já indicava (610 com TS, 609 sem).
 - **QM6 no solver não linear** (opção `element: "qm6"`, 4 modos incompatíveis por elemento, Newton local + condensação): **experimental, não funciona no S1.** Passa na compressão uniaxial (T1: mesmos passos do Q4), mas no S1 fissurado o Newton global diverge já no 1º passo (resíduo cai a 6 % e depois explode), mesmo com laço local secante e λ minúsculo; com malha fina o tempo chega a 50 min sem passo algum. Hipóteses não testadas: modos incompatíveis com tração nula criam mecanismos sem energia nos elementos fissurados; rigidez tangente inconsistente com a lei; necessidade de limitar α. Padrão continua Q4. Barras embutidas usam só a parte compatível do campo.
+
+## Comparação de malha com o livro (S1, Q4, lc = 0,26 m)
+
+O livro varia "o número de elementos ao longo da seção A-A" (Tab. 6.16: 10 → 20; legenda da Fig. 6.24a: 4 → 8) e obtém 629 → 610 kN (−3 %). Como não está claro qual comprimento é a seção A-A, rodamos as interpretações plausíveis:
+
+| Interpretação | malha grossa | malha fina | queda |
+|---|---|---|---|
+| A: largura do pilar 0,64 m, 10 → 20 elementos (64 → 32 mm) | 677 kN | 580 kN | −14 % |
+| A: 0,64 m, 4 → 8 elementos (160 → 80 mm) | 856 kN | 803 kN | −6 % |
+| B: largura total 1,2 m, 10 → 20 elementos (120 → 60 mm) | 1027 kN | 601 kN | −41 % |
+
+Nenhuma interpretação reproduz os −3 % do livro; a mais plausível (A, 10 → 20) dá −14 %, perto do nosso 40 → 20 mm (−12 %). A comparação **não dissolve** a diferença: a dependência de malha do nosso solver é maior que a do livro. Observação: as cargas do livro (610–629 kN) coincidem com as nossas em h ≈ 40–60 mm (601–615 kN), mas o livro usa malha não estruturada e (no M0) tension stiffening. Seção A-A e tipo de malha do livro continuam não verificados.
