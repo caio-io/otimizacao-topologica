@@ -233,3 +233,12 @@ Arquivo recebido: "Catálogo Computacional de Concreto Armado" (resposta ao `doc
 | 20 mm | 539 kN | 593 kN |
 
   As placas elevam a capacidade (+10 a +14 %) e **não reduzem a dependência de malha** (queda 40→20 mm: 12 % sem, 16 % com). Ressalva: a espessura da placa é igual a h (uma fileira), então ela muda junto com a malha; o teste não isola a espessura. Hipótese "singularidade nodal explica a dependência": **não sustentada**. Próximos suspeitos: Q4 puro (QM6 no solver não linear), aderência perfeita e a própria lei sem tração.
+
+## Comprimento de esmagamento: conferido no livro (Kaufmann et al., 2020)
+
+Verificado no PDF (páginas impressas; o PDF tem 8 páginas a mais que a numeração impressa):
+- **p. 18 (Seção 3.3.1):** o critério explícito εcu2 "deve ser imposto sobre uma deformação média calculada sobre um comprimento característico de banda de esmagamento", para evitar dependência da malha; o usuário define o comprimento, e "um valor pequeno entre a profundidade da zona comprimida e a espessura da seção é recomendado". As verificações dos Caps. 4 e 5 usaram patamar plástico infinito; **todas as do Cap. 6 usaram εcu2 = 3,5 ‰ sobre um comprimento igual à espessura da região**. O ηfc não é necessário com esse critério.
+- **p. 104 (Tab. 6.1):** CC = |εc3| ≥ |εcu2| = 3,5 ‰ "sobre um comprimento igual à espessura da região" ou divergência por amolecimento.
+- **p. 137 (6.5.3):** na S1 a espessura do modelo é a soma das espessuras das placas de carga, **2·lb = 0,26 m**. Portanto lc = 0,26 m é o que o livro faz (não foi calibração nossa). Apoios de neoprene tratados como fixos nas duas direções (igual ao nosso).
+- **Geometria da média não é definida** (janela, círculo, banda): a janela quadrada de lado lc é interpretação nossa.
+- **Malha na S1 (p. 138–140):** 10 vs 20 elementos na seção A-A (a legenda da Fig. 6.24a diz 4 vs 8 FE; o livro é inconsistente). Pu: M0 629, M1 610, M2 609 (sem TS), M3 568 (εcu 2 ‰); ensaio 556. Variação de malha < 5 % ("o resultado é um pouco sensível"; recomenda estudar a malha). O M0 usa tension stiffening (TCM) em todas as barras; o nosso modelo não tem TS.
