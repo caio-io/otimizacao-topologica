@@ -66,6 +66,8 @@ export interface NlParams {
   epsCu: number;
   /** comprimento de esmagamento [m]: critério sobre a deformação MÉDIA nessa janela; 0 = valor pontual */
   crushLength: number;
+  /** norma (perfil de parâmetros de projeto, ver `codes.ts`); padrão NBR 6118 */
+  code?: "NBR6118" | "EC2" | "MC2010" | "ACI318";
 }
 
 export interface Scene {

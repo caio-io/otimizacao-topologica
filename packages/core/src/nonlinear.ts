@@ -1,6 +1,7 @@
 import type { Problem } from "./types";
 import { buildModel, elementStiffness, solveBandedAssembled } from "./fe";
 import type { Scene } from "./scene";
+import { codeById, fcdOfCode } from "./codes";
 
 /**
  * Nível 2 do roteiro CSFM: análise não linear de peças planas de concreto com armadura 1D.
@@ -729,9 +730,11 @@ export function barsFromScene(s: Scene): Bar[] {
   }));
 }
 
-/** concreto da cena: valores médios (fc = fck) ou de projeto (0,85·fck/γc, γc = 1,4) */
+/** concreto da cena: valores médios (fc = fck) ou de projeto (fcd da norma escolhida; padrão NBR 6118: 0,85·fck/1,4) */
 export function concreteFromScene(s: Scene): ConcreteLaw {
   const fck = s.fck ?? 30, nl = s.nl ?? { values: "design", epsCu: 0.0035, crushLength: 0 };
-  const c = nl.values === "mean" ? { fc: fck * 1000, eps0: 0.002, epsu: nl.epsCu } : { ...nbrConcrete(fck), epsu: nl.epsCu };
-  return c;
+  const code = codeById(nl.code);
+  return nl.values === "mean"
+    ? { fc: fck * 1000, eps0: code.epsC0, epsu: nl.epsCu }
+    : { fc: fcdOfCode(code, fck) * 1000, eps0: code.epsC0, epsu: nl.epsCu };
 }

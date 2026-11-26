@@ -94,7 +94,10 @@
     <h2>Análise não linear (Nível 2)</h2>
     <small class="note">Concreto <b>sem tração</b> + barras de aço com <b>aderência perfeita</b> (fissuras girantes, parábola-retângulo). Dá a carga última, o modo de ruptura e a força nas barras. <i>Não é a verificação CSFM completa</i>: sem redução por deformação transversal (kc2), sem tension stiffening e sem ELS.</small>
     <label title="Valores médios: fc = fck, sem coeficientes (comparação com ensaios). De projeto: fc = 0,85·fck/γc, γc = 1,4 (NBR 6118).">Resistências do concreto
-      <select id="nlValues"><option value="mean">Médias (fc = fck, sem coeficientes)</option><option value="design">De projeto (0,85·fck/1,4)</option></select>
+      <select id="nlValues"><option value="mean">Médias (fc = fck, sem coeficientes)</option><option value="design">De projeto (fcd da norma escolhida)</option></select>
+    </label>
+    <label title="Perfil de parâmetros de projeto: γc, αcc, εc2, εcu. Trocar a norma atualiza εcu; os valores podem ser editados em seguida. Veja o que está verificado em docs/csfm-roteiro.md (cada perfil declara o que ainda está pendente).">Norma
+      <select id="nlCode"><option value="NBR6118">NBR 6118 (γc 1,4 · αcc 0,85)</option><option value="EC2">Eurocode 2 (provisório)</option><option value="MC2010">fib Model Code 2010 (provisório)</option><option value="ACI318">ACI 318 (provisório)</option></select>
     </label>
     <div class="grid2">
       <label title="Deformação de compressão em que o concreto esmaga (0,0035 = 3,5 ‰).">εcu (‰)<input id="nlEpsCu" type="number" step="0.1" min="1" value="3.5" /></label>

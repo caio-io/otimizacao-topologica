@@ -275,3 +275,9 @@ S1 (Q4, lc = 0,26 m, apoio 0,12 m) com os apoios restringidos **só na vertical*
 | 20 mm | 539 kN (CC) | 576 kN (FR) |
 
 Com ux livre o apoio deixa de ser o ponto crítico: o tirante As1 recebe o empuxo horizontal (450–459 kN, perto de ft·As = 474 kN) e a ruptura passa a ser da **barra (FR)**, não do concreto (no ensaio: CC + FY). A queda de 40 → 20 mm cai de 12 % para 6 %. Conclusão: a restrição horizontal rígida no canto do apoio contribui para a dependência de malha, mas o modelo só vertical não é fiel ao ensaio (modo de ruptura e carga acima de 556 kN). Teste de apoio intermediário (neoprene com rigidez horizontal finita) ainda não feito; o solver não tem molas de apoio.
+
+## Normas como dado (perfis normativos)
+
+`packages/core/src/codes.ts`: cada norma é um perfil (`DesignCode`) com γc, αcc, εc2, εcu, ηfc, γs, εud e, quando conferidos, os fatores de redução de bielas. A cena guarda `nl.code` (padrão NBR 6118) e `concreteFromScene` usa o perfil; a interface tem o seletor "Norma" (trocar atualiza o εcu, que continua editável). **Verificado:** NBR 6118 (γc 1,4, αcc 0,85, εc2 2 ‰, εcu 3,5 ‰, γs 1,15, εud 10 ‰); fatores de bielas de EC2, MC2010 e SIA (livro do CSFM, Tab. 2.1, p. 12; teste confere fck = 30 e 50 MPa); ACI: εcu 3,0 ‰ e φ 0,75. **Pendente (cada perfil declara em `status.pendente`):** fatores fcd1/2/3 da NBR (conferir a ordem), γc/αcc/γs/εud de EC2, MC2010 e ACI (provisórios), εud por classe de ductilidade, ACI βs/βn. Os fatores de biela ainda não alimentam o solver nem o módulo de bielas (hoje só o concreto do Nível 2 usa o perfil).
+
+**kc2:** a fórmula continua ausente (a resposta do Gemini sobre "CSFM sem kc2" apenas fixa kc2 = 1). Postergado até haver fonte.

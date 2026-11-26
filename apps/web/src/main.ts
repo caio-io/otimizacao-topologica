@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
-import { STEEL_CLASSES, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
-import type { LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
+import { STEEL_CLASSES, codeById, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import type { NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const cv = $<HTMLCanvasElement>("cv");
@@ -25,6 +25,7 @@ function loadSaved(): Scene | null {
     const okBar = (b: any) => b && typeof b.id === "string" && typeof b.label === "string" && Array.isArray(b.path) && b.path.every(okPt) && [b.areaCm2, b.fy, b.ft, b.Es, b.epsU].every(num);
     if (o.bars !== undefined && !(Array.isArray(o.bars) && o.bars.every(okBar))) delete o.bars;
     if (o.nl !== undefined && !(o.nl && (o.nl.values === "mean" || o.nl.values === "design") && num(o.nl.epsCu) && num(o.nl.crushLength))) delete o.nl;
+    if (o.nl && !["NBR6118", "EC2", "MC2010", "ACI318"].includes(o.nl.code)) delete o.nl.code;
     return o as Scene;
   } catch { return null; }
 }
@@ -841,13 +842,15 @@ function renderBars() {
 }
 function syncNl() {
   const nl = scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
-  $<HTMLSelectElement>("nlValues").value = nl.values; $<HTMLInputElement>("nlEpsCu").value = String(Math.round(nl.epsCu * 10000) / 10);
+  $<HTMLSelectElement>("nlValues").value = nl.values; $<HTMLSelectElement>("nlCode").value = nl.code ?? "NBR6118"; $<HTMLInputElement>("nlEpsCu").value = String(Math.round(nl.epsCu * 10000) / 10);
   $<HTMLInputElement>("nlCrush").value = String(nl.crushLength);
   renderBars();
   $("presetNote").textContent = presetSel.value.includes("S1") ? "Ensaio: 556 kN por apoio real (P/4 → 2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm: rápido (≈ 10 s); 20 mm: ≈ 4 min." : "";
 }
-const readNl = () => { scene.nl = { values: $<HTMLSelectElement>("nlValues").value as "mean" | "design", epsCu: Math.max(0.001, +$<HTMLInputElement>("nlEpsCu").value / 1000), crushLength: Math.max(0, +$<HTMLInputElement>("nlCrush").value) }; };
+const readNl = () => { scene.nl = { code: $<HTMLSelectElement>("nlCode").value as NonNullable<NlParamsT["code"]>, values: $<HTMLSelectElement>("nlValues").value as "mean" | "design", epsCu: Math.max(0.001, +$<HTMLInputElement>("nlEpsCu").value / 1000), crushLength: Math.max(0, +$<HTMLInputElement>("nlCrush").value) }; };
 for (const id of ["nlValues", "nlEpsCu", "nlCrush"]) $(id).onchange = () => { readNl(); changed(); };
+// trocar a norma atualiza o εcu do perfil (editável em seguida)
+$("nlCode").onchange = () => { $<HTMLInputElement>("nlEpsCu").value = String(Math.round(codeById($<HTMLSelectElement>("nlCode").value).epsCu * 10000) / 10); readNl(); changed(); };
 $("nl").onclick = () => {
   if ($("nl").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
   readNl(); localStorage.setItem("stm-scene", JSON.stringify(scene));
