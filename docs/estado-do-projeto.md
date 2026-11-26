@@ -94,6 +94,8 @@ Detalhes, tabelas e números em `docs/csfm-roteiro.md`. Resumo:
 
 Painel lateral em **abas** (Modelo · Otimização · Nível 2) com cabeçalho do aplicativo, seletor de exemplo no topo, **barra de vista** acima do desenho (vista, malha, iteração) e cartão fixo de estado e reações. Exemplos de análise não linear abrem direto na aba Nível 2; a aba escolhida é lembrada. Todos os identificadores de elementos foram mantidos, então a lógica de `main.ts` não mudou (só o código das abas, no fim do arquivo). Verificado no navegador (S1 em 60 mm roda e mostra resultado e reações). **Dados de falha expostos pelo solver** (janela crítica de esmagamento, início do patamar, escoamento por barra, barra que rompe), desenhados e descritos no Nível 2. **Editor de armadura inteligente** (cobrimento informado pelo usuário; a barra aparece ao passar o mouse sobre a face; formas reta, L, U; As = n·π·Ø²/4; remover na lista). **Próximos passos da interface:** estribos e malhas, edição dos pontos de uma barra, fissuração desenhada como traços perpendiculares à tração principal (exige expor a direção principal por elemento no solver) e nó de pórtico recortado como região D (carga de seção N, V, M; armadura do pilar reta e da viga dobrada).
 
+**Fora do escopo (decisão nov/2026):** classificação automática de pilar e viga a partir da geometria e dos apoios; o usuário desenha as barras e escolhe a forma (reta, L, U) no editor de armadura.
+
 ## 5. Fontes (`src/` e `src2/`)
 
 | Fonte | Uso no projeto | Lida a fundo? |
