@@ -137,3 +137,21 @@ Código: `test/calibracao.queiroz2.test.ts` (`CALIBRACAO2=a` ou `b`) e `test/hel
 - **Métrica:** contar toda tração (σ1 > 0) não serve — dá −12,7 % a +10,4 % nas posições que o artigo diz inalteradas (4, 5, 7, 8, 9) e +51 % na pos. 6 em malha fina. O critério de Xia (σ1 > −5σ2) dá ±0,5 % nessas posições e é o adotado.
 - **Alerta:** a fração de elementos cinza (0,1 < ρ < 0,9) cresce de 9 % (filtro 2) para 20–31 % (filtros 3–4) e 15–24 % em malha fina; a binarização em 0,5 passa a influenciar o resultado. Convergência exigiu 14–180 iterações.
 - **Ainda não explicado:** por que a magnitude fica abaixo do artigo. Candidatos: o artigo soma As·L de um modelo de bielas e tirantes simplificado (tirantes esbeltos e concentrados) em vez de integrar a tensão no contínuo; elementos T3 e cargas pontuais; filtro e threshold desconhecidos.
+
+## Nível 2 implementado — `packages/core/src/nonlinear.ts`
+**O que é:** análise não linear de peças planas, para **teste de equilíbrio e capacidade** (não é modelo de projeto).
+- Concreto: sem tração (σ1 = 0 se ε1 > 0; rigidez residual 1e-4·E0 só na matriz, nunca na tensão), fissuras girantes (direções principais de deformação = de tensão), lei uniaxial parábola-retângulo em cada direção principal (`fc = 0,85·fck/γc`, ε0 = 2 ‰, εcu = 3,5 ‰), D secante `Tεᵀ·diag(E1, E3, G)·Tε` com `G = (σ1−σ3)/(2(ε1−ε3))` (eq. 3.12 do livro). **Sem amolecimento por tração transversal (kc2 = 1): isso é o Nível 3.**
+- Armadura: barras de treliça sobre arestas da malha, lei bilinear com encruamento (CA-50: fyd = 500/1,15, ft = 1,08·fy, εu = 5 %), **aderência perfeita**.
+- Solver: Q4 padrão (2×2 Gauss) + correção pelo resíduo com rigidez secante, controle de carga com passo adaptativo e bissecção até o limite; parada por esmagamento (|ε3| ≥ 3,5 ‰ ou divergência com o concreto no patamar), ruptura da barra (ε ≥ εu) ou divergência pura. Reusa o Cholesky em banda (`solveBandedAssembled`, extraído de `solveBanded`).
+- Saídas: fator de carga último, modo (CC/FR/divergência), deslocamentos, forças nas barras, reações por GDL, resíduo de equilíbrio global.
+
+**Testes (`test/nonlinear.test.ts`):**
+| Teste | Esperado | Obtido |
+|---|---|---|
+| T1 compressão uniaxial 0,2 × 0,4 m, C30 | fc·A = 1092,9 kN | 1092,7 kN (CC) |
+| T2 tirante As = 10 cm², concreto sem tração | As·ft = 469,6 kN | 469,5 kN (FR, ε = 4,99 %) |
+| T3 viga-parede 2,4 × 1,5 m, C50, 4Ø20 a 0,1 m, placas de 0,4 m | tirante escoa; equilíbrio de seção coerente | Pu = 1986 kN; N = 548 kN (As·fy = 546,8); reação esq. 995 kN em x̄ = 0,371 m; braço implícito M/T = 1,32 m (≤ 1,4 m) |
+
+**Sobre o T3:** o MBT com braço entre eixos das placas (1,0 m) dá 1505 kN; o FE dá 1986 kN (+32 %). Diagnóstico pelas reações do próprio FE: o centroide da reação vai para a borda interna da placa (0,371 m, não 0,2 m), encurtando o braço para ≈ 0,83 m. O braço de alavanca implícito (1,32 m) cabe na altura útil, então o resultado é fisicamente consistente; a estimativa do MBT é que estava geometricamente grosseira. A reação esquerda (995 kN) difere 0,2 % de P/2 (apoio direito móvel); o equilíbrio vertical global fecha em 1e-6. O T3 leva ≈ 65 s.
+
+**Limitações conhecidas:** aderência perfeita; sem kc2; sem tension stiffening; sem elementos de aderência/ancoragem; a rigidez inicial do concreto é a da parábola (2·fc/ε0), não o Ec; ν = 0 nas direções principais; a convergência perto do patamar do concreto é lenta e o fim por "divergência" é tratado como CC quando ε ≥ 0,95·ε0; não validado ainda contra os ensaios do capítulo 6 do livro nem contra o Queiroz & Leonel.

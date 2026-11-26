@@ -15,7 +15,7 @@ function xiaCase1(h: number, plate: number): Scene {
 }
 
 // lento (~4 min): rode com  CALIBRACAO=1 npx vitest run test/calibracao.xia.test.ts
-describe.skipIf(!process.env.CALIBRACAO)("Calibração — Xia et al. (2020), Caso I", () => {
+describe.skipIf(!(globalThis as any).process?.env?.CALIBRACAO)("Calibração — Xia et al. (2020), Caso I", () => {
   it("índices TRS/SR para SIMP e BESO a 40% (malha 50 mm)", () => {
     const sc = xiaCase1(0.05, 0.15);
     const p = buildProblem(sc).problem!;

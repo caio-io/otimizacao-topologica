@@ -8,7 +8,7 @@ import { queirozScene } from "./helpers/queiroz";
  * colunas x0 = 1,0 / 2,625 / 4,25 m (posições 1-3, 4-6, 7-9) e linhas y0 = 1,0 / 2,75 / 4,5 m (de baixo para cima).
  */
 // lento: CALIBRACAO=1 npx vitest run test/calibracao.queiroz.test.ts
-describe.skipIf(!process.env.CALIBRACAO)("Calibração — Queiroz & Leonel (2025), viga-parede com abertura", () => {
+describe.skipIf(!(globalThis as any).process?.env?.CALIBRACAO)("Calibração — Queiroz & Leonel (2025), viga-parede com abertura", () => {
   it("volume de aço por posição de abertura (SIMP 30 %)", () => {
     const paper: Record<string, number> = { "0": 888, "1": 986, "2": 1097, "3": 1019, "4": 888, "5": 891, "6": 1126, "7": 888, "8": 888, "9": 888 };
     for (const rmin of [2, 3]) {

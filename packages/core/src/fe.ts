@@ -233,6 +233,15 @@ export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float
       }
     }
   }
+  solveBandedAssembled(L, ndof, bw, isFixed, f, u);
+}
+
+/**
+ * Fatora (Cholesky em banda) e resolve uma matriz já montada: `L[i*(bw+1) + (bw-(i-j))]` guarda A[i][j], j ≤ i.
+ * GDLs restringidos (`isFixed`) viram identidade e recebem u = 0. A matriz `L` é sobrescrita.
+ */
+export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, isFixed: Uint8Array, f: Float64Array, u: Float64Array): void {
+  const w = bw + 1;
   for (let i = 0; i < ndof; i++) if (isFixed[i]) L[i * w + bw] = 1;
   // fatoração L Lᵀ
   for (let i = 0; i < ndof; i++) {

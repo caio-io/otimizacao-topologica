@@ -8,3 +8,4 @@ export * from "./scene";
 export * from "./concrete";
 export * from "./csfm";
 export * from "./indices";
+export * from "./nonlinear";

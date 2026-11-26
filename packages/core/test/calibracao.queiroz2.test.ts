@@ -14,9 +14,9 @@ function caso(pos: number, h: number, rmin: number, tol: number, maxIter: number
 }
 
 // lento: CALIBRACAO2=a|b  npx vitest run test/calibracao.queiroz2.test.ts
-describe.skipIf(!process.env.CALIBRACAO2)("Queiroz & Leonel — refinamento", () => {
+describe.skipIf(!(globalThis as any).process?.env?.CALIBRACAO2)("Queiroz & Leonel — refinamento", () => {
   it("A: convergência estrita (tol 0,001; até 300 it.) em h = 0,125 m, filtros 2/3/4 e duas métricas", () => {
-    if (process.env.CALIBRACAO2 !== "a") return;
+    if ((globalThis as any).process?.env?.CALIBRACAO2 !== "a") return;
     for (const rmin of [2, 3, 4]) {
       const res: Record<number, ReturnType<typeof caso>> = {};
       for (const pos of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) res[pos] = caso(pos, 0.125, rmin, 0.001, 300);
@@ -28,7 +28,7 @@ describe.skipIf(!process.env.CALIBRACAO2)("Queiroz & Leonel — refinamento", ()
     }
   }, 3_600_000);
   it("B: malha fina h = 0,0625 m (17 920 el.), filtro 0,375 m, posições 0, 1, 2, 3, 6", () => {
-    if (process.env.CALIBRACAO2 !== "b") return;
+    if ((globalThis as any).process?.env?.CALIBRACAO2 !== "b") return;
     const res: Record<number, ReturnType<typeof caso>> = {};
     for (const pos of [0, 1, 2, 3, 6]) res[pos] = caso(pos, 0.0625, 6, 0.002, 200);
     const rows = [0, 1, 2, 3, 6].map((pos) => {

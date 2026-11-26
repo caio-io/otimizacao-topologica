@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+import { base, buildProblem, ca50, nbrConcrete, plateLoad, solveNonlinear } from "../src";
+import type { Problem } from "../src";
+
+/** bloco manual: todos os elementos de concreto */
+const block = (nelx: number, nely: number, h: number): Problem => ({
+  nelx, nely, h, t: 0.3, E: 30e6, nu: 0.2, mask: new Uint8Array(nelx * nely).fill(1), fixed: [], loads: [],
+});
+
+describe("Nível 2 — análise não linear (concreto sem tração + barras, aderência perfeita)", () => {
+  it("T1 compressão uniaxial: carga última = fc·A (parábola-retângulo, εcu = 3,5 ‰)", () => {
+    const nelx = 4, nely = 8, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let i = 0; i <= nelx; i++) p.fixed.push(2 * (i * (nely + 1) + nely) + 1); // base: uy
+    p.fixed.push(2 * (0 * (nely + 1) + nely)); // um ux
+    for (let i = 0; i <= nelx; i++) p.loads.push({ node: i * (nely + 1), fx: 0, fy: -(i === 0 || i === nelx ? 0.5 : 1) / nelx });
+    const c = nbrConcrete(30);
+    const A = nelx * h * p.t;
+    const r = solveNonlinear(p, { concrete: c, dLambda: 100 });
+    console.log(`T1: λu=${r.lambda.toFixed(1)} kN  fc·A=${(c.fc * A).toFixed(1)} kN  modo=${r.mode}  εc,máx=${(r.maxCompStrain * 1000).toFixed(2)} ‰  eq=${r.equilibrium.y.toExponential(1)}`);
+    expect(r.mode).toBe("CC");
+    expect(r.lambda / (c.fc * A)).toBeGreaterThan(0.98);
+    expect(r.lambda / (c.fc * A)).toBeLessThan(1.001);
+    expect(r.equilibrium.y).toBeLessThan(1e-3);
+  });
+
+  it("T2 tirante: o concreto não resiste à tração; carga última = As·ft (ruptura da barra)", () => {
+    const nelx = 10, nely = 2, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * (0 * (nely + 1) + j), 2 * (0 * (nely + 1) + j) + 1);
+    p.loads.push({ node: nelx * (nely + 1) + 1, fx: 1, fy: 0 });
+    const area = 1e-3;
+    const r = solveNonlinear(p, { concrete: nbrConcrete(30), bars: [{ x0: 0, y0: 0.05, x1: 0.5, y1: 0.05, area, steel: ca50, label: "tirante" }], dLambda: 50 });
+    const Nu = area * ca50.ft;
+    console.log(`T2: λu=${r.lambda.toFixed(1)} kN  As·ft=${Nu.toFixed(1)} kN  modo=${r.mode}  barra: Nmax=${r.bars[0].axialMax.toFixed(1)} εmax=${(r.bars[0].strainMax * 100).toFixed(2)} %  eq=${r.equilibrium.x.toExponential(1)}`);
+    expect(r.mode).toBe("FR");
+    expect(r.lambda / Nu).toBeGreaterThan(0.98);
+    expect(r.lambda / Nu).toBeLessThan(1.001);
+    expect(r.bars[0].yielded).toBe(true);
+    expect(r.equilibrium.x).toBeLessThan(1e-3);
+  });
+
+  it("T3 viga-parede com tirante: tirante escoa, equilíbrio de seção consistente (braço de alavanca cabe na altura) e capacidade ≥ MBT", () => {
+    const h = 0.05;
+    const s = base(h, 0.4);
+    s.t = 0.4; s.E = 35e6; s.nu = 0.2;
+    s.shapes.push({ id: "S1", mode: "add", pts: [[0, 0], [0.4, 0], [2.0, 0], [2.4, 0], [2.4, 1.5], [0, 1.5]] });
+    s.supports.push({ id: "Ap1", x0: 0, y0: 0, x1: 0.4, y1: 0, ux: true, uy: true });
+    s.supports.push({ id: "Ap2", x0: 2.0, y0: 0, x1: 2.4, y1: 0, ux: false, uy: true });
+    s.loads.push(plateLoad("P1", 1.2, 1.5, 0.4, -1000));
+    const b = buildProblem(s);
+    expect(b.errors).toEqual([]);
+    const area = 4 * Math.PI * 0.01 ** 2; // 4Ø20
+    const c = nbrConcrete(50);
+    const bar = { x0: 0, y0: 0.1, x1: 2.4, y1: 0.1, area, steel: ca50, label: "tirante" };
+    const t0 = Date.now();
+    const r = solveNonlinear(b.problem!, { concrete: c, bars: [bar], origin: b.origin, dLambda: 0.2, checkCrushing: false });
+    const Pu = r.lambda * 1000;
+    // MBT: T = As·fyd; a = T/(fc·t); z = (1,5 − 0,1) − a/2; Pu = 2·T·z/(L/2), L = 2,0 m
+    const T = area * ca50.fy, a = T / (c.fc * s.t), z = 1.4 - a / 2, PuMbt = (2 * T * z) / 1.0;
+    console.log(`T3: Pu=${Pu.toFixed(0)} kN  MBT=${PuMbt.toFixed(0)} kN (razão ${(Pu / PuMbt).toFixed(2)})  modo=${r.mode}  passos=${r.steps.length}  Nmax,barra=${r.bars[0].axialMax.toFixed(0)} kN (As·ft=${(area * ca50.ft).toFixed(0)})  εc,máx=${(r.maxCompStrain * 1000).toFixed(2)} ‰  eq=(${r.equilibrium.x.toExponential(1)}, ${r.equilibrium.y.toExponential(1)})  ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    // diagnóstico físico independente do MBT: centroide das reações verticais no apoio esquerdo e braço de alavanca implícito
+    const nely = b.problem!.nely;
+    let Rs = 0, Rx = 0;
+    for (let i = 0; i <= 8; i++) { const ry = r.reaction[2 * (i * (nely + 1) + nely) + 1]; Rs += ry; Rx += ry * i * h; }
+    const xr = Rx / Rs; // centroide da reação esquerda
+    const Rleft = Rs, Mext = Rleft * (1.2 - xr) - (Pu / 2) * 0.1; // momento em x = 1,2 m (metade esquerda da placa: P/2 em x = 1,1 m)
+    const zImpl = Mext / r.bars[0].axialMax;
+    console.log(`T3 diag: reação esq.=${Rleft.toFixed(0)} kN em x̄=${xr.toFixed(3)} m; M(x=1,2)=${Mext.toFixed(0)} kN·m; braço implícito z=M/T=${zImpl.toFixed(2)} m`);
+    expect(Math.abs(Rleft - Pu / 2) / (Pu / 2)).toBeLessThan(1e-2); // reação esquerda ≈ P/2 (o apoio direito é móvel e as reações não são exatamente simétricas)
+    expect(zImpl).toBeGreaterThan(0.8);
+    expect(zImpl).toBeLessThan(1.4); // a resultante de compressão tem de caber na altura útil
+    expect(r.bars[0].yielded).toBe(true);
+    expect(r.bars[0].axialMax / T).toBeGreaterThan(0.99); // tirante escoou
+    expect(r.equilibrium.y).toBeLessThan(1e-3);
+    expect(Pu / PuMbt).toBeGreaterThan(0.85); // MBT com braço entre eixos dá o limite inferior aproximado
+  }, 300_000);
+});
