@@ -61,3 +61,23 @@ Uso: comparar a força/armadura do STM extraído com a carga de ruptura medida (
 ## Adicionado em nov/2026 (fora de `src/` e `src2/`)
 - **Lu, Fairclough, He & Gilbert (2025)** — *Combined truss and continuum topology optimization of structures*, Struct. Multidisc. Optim. 68:142, https://doi.org/10.1007/s00158-025-04063-2 (arquivo local: Downloads/s00158-025-04063-2.pdf, 21 p.). Dois passos: identifica regiões de baixa e alta fração de volume; as de baixa recebem **treliça (ground structure)** e as de alta, **elementos contínuos**, ligados por interfaces (um-para-muitos e muitos-para-muitos). Formulação de **análise limite** (cônica, pontos interiores), critério de von Mises, que produz resultados com escalas mistas de comprimento. Cita a linha concreto+armadura (Amir 2013, Gaynor 2013, Jewett & Carstensen 2019) e Xia et al. 2020. Lido: resumo, introdução e estrutura; formulações ainda não lidas em detalhe.
   Relevância: mesma família do CSFM (campos de tensão estaticamente admissíveis); alternativa ao esqueleto morfológico para o estágio 5. Limitação: exige solver de programação cônica, ainda não disponível no navegador. Valida contra: MBB e exemplos clássicos, não vigas-parede de concreto.
+
+## Resumo das 11 fontes (gerado por IA externa) — conferido contra os PDFs
+Um resumo das fontes de `src/`, `src2/` e `src-fib/` foi colado pelo usuário (gerado pelo Gemini). Conferi o **conteúdo** das afirmações numéricas contra o texto extraído dos PDFs; **os números de página citados no resumo não foram conferidos**. Use o resumo só como mapa; para implementar, ler a página.
+
+| Fonte | Afirmação conferida | Resultado |
+|---|---|---|
+| Amir (2013) | cimento ≈ 5 % do CO₂, 900 kg/t; ganho de 22 % (viga-parede), ≈ 32 % (consolo), 20–30 % em geral | ✔ |
+| Borges (2022), `001143839.pdf` | EC2: −40 % volume, −41,8 % massa, −72,6 % custo; ACI com abertura: −20 %, −21,5 %, −55,6 % | ✔ (valores encontrados no texto) |
+| Queiroz & Leonel (2025), `Pesquisa e Desenvolvimento_estruturas_119.pdf` | 34 % das emissões; aberturas nas posições 2 e 6 elevam o aço em 23,5 % e 26,8 %; posições 4, 7, 8, 9 não elevam | ✔ — Tabela 1: aço 888 cm³ (sem abertura); posições 1 = +11,0 %, 2 = +23,5 %, 3 = +14,7 %, 4/7/8/9 = 0 %, 5 = +0,3 %, 6 = +26,8 % (o resumo omite 1, 3 e 5) |
+| Pantoja et al. (2010) | NBR exige fck ≈ 38 MPa contra 24 MPa (ACI); índice de referência JCSS β = 3,8 | ✔ |
+| Xia, Langelaar & Hendriks (2020) | 28 resultados (23 de OT + 5 STM manuais); materiais ortotrópicos pior que o elástico isotrópico; STS < 1 | ✔ |
+| Brito (2026), `THALYSON_ISSAC_JESUS_BRITO.pdf` | EC = 30 GPa, ET = 200 GPa; Tikhonov; tolerância de equilíbrio 1e-4; resíduos 1e-11 a 1e-12 | ✔ (a tolerância 1e-4 é do resíduo de equilíbrio; o parâmetro de Tikhonov é 1e-12 por padrão) |
+| Tavares & Canha (2019), `cap11_…pdf` | Ground Structure, custo nodal (Ln) | ✔ (existência; detalhes não conferidos) |
+| Guest & Moen (2010); Almeida (2015) | MMA, HPM, pilar hammerhead; SESO, 109°28′16″, Maupertuis | ✔ (existência) |
+| fib MC2010 vol. 1 (Bull. 65) | β alvo 1,5 (ELS), 3,1 (fadiga), 3,8 (ELU); 5 formatos de segurança; C120 e LC80 | ✔ |
+| fib MC2010 vol. 2 (Bull. 56) | kc = 1,0 / 0,75 / 0,55; wlim = 0,30 mm (armado, classes de exposição 2–4); θ = 36° nível I | ✔, com **ressalva**: 0,55 é de **bielas** com armadura oblíqua; para **nós** o rascunho dá 1,0·ηfc (sem tirante) e 0,75·ηfc (com tirante), não 0,55 |
+
+**Erros do resumo:** cita `001143839_2.pdf`, arquivo que não existe nas pastas (só há `001143839.pdf`, duplicado em `src/` e `src2/`); a frase sobre os nós atribui 0,55 a nós. **Não conferido:** fatores parciais iguais a 1,0 no ELS (a busca no texto não achou) e todos os números de página. **Não coberto pelo resumo:** Liang/Xie/Steven (2000), Bruggi (2009), Jewett (2019), Luo (2012), Pastore (2019) e Cilamce (2010).
+
+**Útil para a calibração:** a Tabela 1 de Queiroz & Leonel (nove posições de abertura quadrada numa viga-parede, volume final 30 %, aço em cm³) é um caso de comparação direto para a nossa ferramenta (alvo: mesma ordenação das posições). Os dados geométricos da viga-parede não foram extraídos ainda.
