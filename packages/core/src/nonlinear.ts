@@ -80,6 +80,8 @@ export interface NlOptions {
    * locais sob placas (dependência de malha).
    */
   crushLength?: number;
+  /** usa a janela antiga (raio = round(lc/2h), dividida pela área total incluindo vazios) — só para comparação */
+  crushLegacy?: boolean;
   /** passo inicial de carga, em múltiplos da carga de referência (padrão 0,1) */
   dLambda?: number;
   /** carga máxima, em múltiplos da carga de referência (padrão 1e4) */
@@ -173,6 +175,31 @@ function windowMax(v: Float64Array, nelx: number, nely: number, R: number): numb
   return best;
 }
 
+/**
+ * Maior média de `v` numa janela quadrada de (2R+1)² elementos (deslocada para caber na malha), dividida pelo número de
+ * elementos de CONCRETO dentro da janela — vazios fora da peça não diluem a média nas bordas.
+ */
+function windowMaxMasked(v: Float64Array, mask: Uint8Array, nelx: number, nely: number, R: number): number {
+  if (R <= 0) return v.reduce((m, x) => Math.max(m, x), 0);
+  const W = nelx + 1, H = nely + 1, S = new Float64Array(W * H), M = new Float64Array(W * H);
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+    const k = (i + 1) * H + (j + 1), e = i * nely + j;
+    S[k] = v[e] + S[i * H + (j + 1)] + S[(i + 1) * H + j] - S[i * H + j];
+    M[k] = (mask[e] !== 0 ? 1 : 0) + M[i * H + (j + 1)] + M[(i + 1) * H + j] - M[i * H + j];
+  }
+  let best = 0;
+  const n = 2 * R + 1;
+  for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+    if (v[i * nely + j] === 0) continue;
+    const i0 = Math.max(0, Math.min(nelx - n, i - R)), j0 = Math.max(0, Math.min(nely - n, j - R));
+    const i1 = Math.min(nelx, i0 + n), j1 = Math.min(nely, j0 + n);
+    const sum = S[i1 * H + j1] - S[i0 * H + j1] - S[i1 * H + j0] + S[i0 * H + j0];
+    const cnt = M[i1 * H + j1] - M[i0 * H + j1] - M[i1 * H + j0] + M[i0 * H + j0];
+    if (cnt > 0) best = Math.max(best, sum / cnt);
+  }
+  return best;
+}
+
 function steelTangent(s: SteelLaw, eps: number) {
   const ey = s.fy / s.Es;
   if (Math.abs(eps) <= ey) return s.Es;
@@ -261,7 +288,11 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   for (const be of barEls) { const a = nodeXY(be.a), b = nodeXY(be.b); samplePos[be.bar].push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
   for (const pc of pieces) samplePos[pc.bar].push([pc.xm, pc.ym]);
   const samplesOf = (a: { barForces: Float64Array[] }) => bars.map((_, k) => Array.from(a.barForces[k], (N, q) => ({ x: samplePos[k][q][0], y: samplePos[k][q][1], N })));
-  const crushOf = (a: { epsEl: Float64Array; maxEpsC: number }) => (opt.crushLength ? windowMax(a.epsEl, nelx, nely, Math.max(0, Math.round(opt.crushLength / (2 * h)))) : a.maxEpsC);
+  // janela física: n = 2R+1 elementos com n·h ≈ lc (a versão antiga usava R = round(lc/2h), isto é, n·h ≈ lc + h, e dividia pela área total)
+  const crushWin = (eps: Float64Array) => opt.crushLegacy
+    ? windowMax(eps, nelx, nely, Math.max(0, Math.round((opt.crushLength ?? 0) / (2 * h))))
+    : windowMaxMasked(eps, p.mask, nelx, nely, Math.max(0, Math.round(((opt.crushLength ?? 0) / h - 1) / 2)));
+  const crushOf = (a: { epsEl: Float64Array; maxEpsC: number }) => (opt.crushLength ? crushWin(a.epsEl) : a.maxEpsC);
 
   // GDLs sem rigidez (só tocam vazios) viram restrições
   const used = new Uint8Array(ndof);
@@ -463,7 +494,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     const eq = equilibrate(lamTry, uGood);
     let failMode: NlMode | null = null;
     // classifica pelo estado (convergido ou última iteração): ruptura do aço, esmagamento ou divergência pura
-    const epsCheck = opt.crushLength ? windowMax(eq.asm.epsEl, nelx, nely, Math.max(0, Math.round(opt.crushLength / (2 * h)))) : eq.asm.maxEpsC;
+    const epsCheck = opt.crushLength ? crushWin(eq.asm.epsEl) : eq.asm.maxEpsC;
     if (check && epsCheck >= c.epsu) failMode = "CC";
     for (let k = 0; k < bars.length; k++) if (eq.asm.barEps[k] >= bars[k].steel.epsU) failMode = "FR";
     // sem convergência: se o concreto chegou ao patamar (≥ 0,95·ε0) é esgotamento da resistência do concreto (CC),
