@@ -27,3 +27,30 @@ Fonte principal: Kaufmann et al., *Compatible Stress Field Design of Structural 
 3. Nível 2: concreto sem tração + barras 1D (aderência perfeita, rotulada como teste de equilíbrio) + solver secante.
 4. Ler 3.5–3.6 do livro e implementar compression softening (kc2) e TCM.
 5. Substituir a extração de bielas e tirantes pela *ground structure* (Brito, 2026), se confirmado.
+
+## Seções 3.5–3.6 do livro (lidas depois)
+- **Abertura de fissura (p. 31–33):** cinemática de abertura pura, sem escorregamento; direção da fissura = direção principal das tensões/deformações (θr = θσ = θε). Projetada na barra: `w = wb / cos(θr + θb − π/2)` (3.10). Estabilizada: `wb = ∫(εm − εcm)dx` sobre sr, `εcm = λ·fctm/(2Es)` (3.11), com **λ = 1,0** (εm calculado com λ = 0,67 é multiplicado por 1,5). Não estabilizada (estribos com ρ < ρcr; cantos reentrantes): `wb = ∫ εs dx` pelo modelo de arrancamento, com σsr. Só para cargas **permanentes**, curto ou longo prazo; limite wlim definido pelo usuário.
+- **ELU × ELS (p. 29–30):** dois cálculos. ELS: aderência perfeita (barras ligadas direto por MPC, sem elementos de aderência), sem ramo plástico do concreto; `Ec,eff = Ecm/(1+φ)`, φ = 2,5 padrão; cargas permanentes primeiro com Ec,eff, depois as demais com Ecm; cálculo de curto prazo separado.
+- **Segurança (p. 29):** formato de coeficientes parciais direto (cargas majoradas, resistências reduzidas por γ); sem adaptação.
+- **Concreto (p. 38):** elementos CQUAD4/CTRIA3 em estado plano, 4 pontos de integração; em cada ponto, direções principais ε1/ε3 e `[σc1; σc3] = diag(E1(ε1,ε3), E3(ε1,ε3))·[ε1; ε3]` (3.12), acoplando as direções pelo softening.
+- **Armadura e aderência (p. 38–40):** barras 1D (CROD) ligadas ao concreto por MPC; no ELU, elemento de aderência com `Gb = kG·Ec/Ø` (kG = 0,2), ramo plástico `Gb·Rf` (Rf = 1e-5), τb = fbd; mola de ancoragem `Fau = β·As·fyd`, `Ku = β·lb,net·Ø·Gb`, KSN = 1e-2; β = 0 reta, 0,3 gancho/curva/laço/barra soldada, 1,0 aderência perfeita/barra contínua (estribos: 1,0). Aderência e ancoragem **não** servem para tension stiffening nem abertura de fissura.
+- **Malha (p. 41–42):** mínimo de 4 elementos em partes finas; máx. 5000 elementos de concreto no programa deles; armadura com elementos do tamanho do elemento de concreto; placas de apoio com 2/3 do elemento; cargas e apoios de área ligados por elementos rígidos.
+- **Solver (p. 43–44):** Newton-Raphson completo (Crisfield 1997) com controle de carga: incremento reduzido à metade se não convergir; carga crítica por bisseção. Critérios de parada: deformação 5% no concreto comprimido e 7% na tração, σ do aço = ft (com γ), escorregamento α·δumax (α = 10). A divergência costuma vir de softening de compressão alto; o programa mostra o último nível convergido.
+- **Resultados (p. 45–46):** utilização = valor/limite: σc3/σc3,lim (3.17), σsr/σsr,lim (3.18), τb/fbd (3.19), flecha (3.20), w/wlim (3.21).
+
+## Calibração — Xia et al. (2020), Caso I (viga-parede 7,5 × 4,7 m, abertura 1,5 × 1,5 m, 3000 kN no topo, malha 50 mm)
+Geometria lida da Fig. 15a (abertura em x 0,5–2,0 m, y 0,5–2,0 m; carga em x = 4,7 m; apoio fixo no canto esquerdo, móvel no direito). Placas de 0,15 m no lugar de cargas/apoios pontuais (limitação do editor). Código: `src/indices.ts` (TRS e SR) e `test/calibracao.xia.test.ts` (`CALIBRACAO=1`).
+
+| Resultado | TRS | SR |
+|---|---|---|
+| Xia, SIMP malha grossa (I-10) | 77,8 % | 0,717 % |
+| Xia, SIMP malha fina (I-11) | 81,4 % | 0,717 % |
+| Xia, todos os resultados (média ± desvio) | 72,3 ± 8,1 % | 0,839 ± 0,129 % |
+| **Aqui, SIMP 40 %, filtro 2 / 3 / 4 elementos** | 83,1 / 83,6 / 82,2 % | 0,176 / 0,175 / 0,181 % |
+| **Aqui, BESO 40 %, filtro 3** | 66,0 % | 0,195 % |
+| Aqui, peça cheia (referência) | 100 % | 0,115 % |
+
+- **TRS:** na faixa publicada (61–83 %); pouco sensível ao raio do filtro (±1 ponto). Mas r0 sai do esqueleto próprio (0,48–0,55 m) e o artigo não dá r0 deste caso: comparação aproximada.
+- **SR:** **não reproduzido** — fica ≈ 4 vezes abaixo do publicado (0,18 contra 0,72 %). A definição (eq. 7) pode usar outra base (p. ex. barras da treliça extraída) ou cargas pontuais; não resolvido. Não usar o SR desta implementação como calibração.
+- **STS** (equilíbrio da treliça extraída) não implementado.
+- Tempo: SIMP 37–91 s, BESO 51 s (14 100 elementos).
