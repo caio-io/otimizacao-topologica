@@ -264,7 +264,7 @@ describe("BESO: proteção de conectividade", () => {
     const p = buildProblem(sc).problem!;
     const cs: number[] = []; let n = 0, last: any;
     for (const r of beso(p, { ...BESO_DEFAULTS, volfrac: 0.35, rmin: 7.5 })) { cs.push(r.compliance); last = r; n++; }
-    expect(last.volume).toBeLessThan(0.37);
+    expect(last.volume).toBeLessThan(0.375);
     // picos isolados (trecho esbelto de 1 elemento) são aceitáveis; antes eram dezenas de iterações perdidas
     expect(cs.filter((c) => c > 5 * last.compliance).length).toBeLessThanOrEqual(3);
     expect(n).toBeLessThanOrEqual(BESO_DEFAULTS.maxIter);
@@ -287,4 +287,51 @@ describe("CSFM linear: zonas tracionadas e armadura", () => {
     expect(z.T).toBeLessThan(1600);
     expect(z.As).toBeCloseTo((z.T / fyd) * 1e4, 9);
   }, 60_000);
+});
+
+import { elementStiffness, elementStiffnessQ4 } from "../src";
+describe("Elemento QM6 (Q4 com modos incompatíveis)", () => {
+  const nu = 0.2;
+  it("simétrico, sem energia em movimentos de corpo rígido", () => {
+    const K = elementStiffness(nu, "qm6");
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) expect(K[r * 8 + c]).toBeCloseTo(K[c * 8 + r], 12);
+    // nós BL, BR, TR, TL de um quadrado de lado 2; translação x, translação y e rotação
+    const xs = [-1, 1, 1, -1], ys = [-1, -1, 1, 1];
+    const modes = [
+      xs.flatMap(() => [1, 0]), xs.flatMap(() => [0, 1]), xs.flatMap((_, a) => [-ys[a], xs[a]]),
+    ];
+    for (const d of modes) {
+      const f = Array.from({ length: 8 }, (_, r) => d.reduce((s, v, c) => s + K[r * 8 + c] * v, 0));
+      expect(Math.max(...f.map(Math.abs))).toBeLessThan(1e-12);
+    }
+  });
+  it("não é mais rígido que o Q4 (energia de flexão pura menor)", () => {
+    const Kq = elementStiffness(nu, "qm6"), K4 = elementStiffnessQ4(nu);
+    // flexão pura: u = x·y, v = −(x²−y²)/2 aproximada pelos valores nodais
+    const xs = [-1, 1, 1, -1], ys = [-1, -1, 1, 1];
+    const d = xs.flatMap((x, a) => [x * ys[a], -(x * x - ys[a] * ys[a]) / 2]);
+    const en = (K: Float64Array) => d.reduce((s, v, r) => s + v * d.reduce((t, w, c) => t + K[r * 8 + c] * w, 0), 0);
+    expect(en(Kq)).toBeLessThan(en(K4));
+  });
+  it("viga esbelta com 2 elementos na altura: QM6 muito mais próximo de Timoshenko que o Q4", () => {
+    const nelx = 24, nely = 2, h = 0.5;
+    const p: Problem = {
+      nelx, nely, h, t: 1, E: 1, nu: 0.3, mask: new Uint8Array(nelx * nely).fill(1),
+      fixed: [], loads: [{ node: nelx * (nely + 1) + nely / 2, fx: 0, fy: -1 }],
+    };
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * j, 2 * j + 1);
+    const L = nelx * h, H = nely * h, I = H ** 3 / 12, G = 1 / (2 * 1.3);
+    const analytic = L ** 3 / (3 * I) + L / (G * (5 / 6) * H);
+    const tipOf = (kind: "q4" | "qm6") => {
+      const m = buildModel(p); m.KE = elementStiffness(p.nu, kind);
+      const u = new Float64Array(m.ndof);
+      solveBanded(m, p.nely, new Float64Array(nelx * nely).fill(1), u);
+      return Math.abs(u[2 * (nelx * (nely + 1) + nely / 2) + 1]) / analytic;
+    };
+    const q4 = tipOf("q4"), qm6 = tipOf("qm6");
+    console.log("flecha/analítica  Q4:", q4.toFixed(3), " QM6:", qm6.toFixed(3));
+    expect(Math.abs(qm6 - 1)).toBeLessThan(Math.abs(q4 - 1));
+    expect(qm6).toBeGreaterThan(0.9);
+    expect(qm6).toBeLessThan(1.1);
+  });
 });

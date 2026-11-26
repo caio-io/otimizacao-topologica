@@ -1,7 +1,82 @@
 import type { Problem } from "./types";
 
 /** Matriz de rigidez do Q4 quadrado, E=1, t=1 (independe do lado h em estado plano). Ordem: BL, BR, TR, TL. */
-export function elementStiffness(nu: number): Float64Array {
+export type ElementKind = "q4" | "qm6";
+
+/**
+ * Rigidez do elemento quadrado (E=1, t=1; em estado plano não depende do lado).
+ * `qm6` (padrão): Q4 com 2 modos incompatíveis por direção (Wilson–Taylor), condensados estaticamente.
+ * Elimina o travamento por cisalhamento do Q4 puro na flexão; continua uma matriz 8×8 constante.
+ */
+export function elementStiffness(nu: number, kind: ElementKind = "qm6"): Float64Array {
+  return kind === "q4" ? elementStiffnessQ4(nu) : elementStiffnessQM6(nu);
+}
+
+function elementStiffnessQM6(nu: number): Float64Array {
+  // quadrado [-1,1]² (J = 1 em coordenadas físicas x=ξ, y=η); nós: BL, BR, TR, TL
+  const xs = [-1, 1, 1, -1], ys = [-1, -1, 1, 1];
+  const cf = 1 / (1 - nu * nu);
+  const D = [cf, cf * nu, 0, cf * nu, cf, 0, 0, 0, cf * (1 - nu) / 2];
+  const g = 1 / Math.sqrt(3);
+  const Kuu = new Float64Array(64), Kua = new Float64Array(32), Kaa = new Float64Array(16);
+  const B = new Float64Array(24), Ba = new Float64Array(12); // 3×8 e 3×4
+  for (const xi of [-g, g]) for (const eta of [-g, g]) {
+    B.fill(0); Ba.fill(0);
+    for (let a = 0; a < 4; a++) {
+      const dNx = xs[a] * (1 + ys[a] * eta) / 4, dNy = ys[a] * (1 + xs[a] * xi) / 4;
+      B[2 * a] = dNx; B[8 + 2 * a + 1] = dNy; B[16 + 2 * a] = dNy; B[16 + 2 * a + 1] = dNx;
+    }
+    // modos: u = φ1·a1 + φ2·a2, v = φ1·a3 + φ2·a4, com φ1 = ξ²−1, φ2 = η²−1
+    Ba[0] = 2 * xi;                 // εx  ← a1
+    Ba[4 + 3] = 2 * eta;            // εy  ← a4
+    Ba[8 + 1] = 2 * eta;            // γxy ← a2 (u,y)
+    Ba[8 + 2] = 2 * xi;             // γxy ← a3 (v,x)
+    const DB = new Float64Array(24), DBa = new Float64Array(12);
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 8; c++) DB[r * 8 + c] = D[r * 3] * B[c] + D[r * 3 + 1] * B[8 + c] + D[r * 3 + 2] * B[16 + c];
+      for (let c = 0; c < 4; c++) DBa[r * 4 + c] = D[r * 3] * Ba[c] + D[r * 3 + 1] * Ba[4 + c] + D[r * 3 + 2] * Ba[8 + c];
+    }
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) { let s = 0; for (let k = 0; k < 3; k++) s += B[k * 8 + r] * DB[k * 8 + c]; Kuu[r * 8 + c] += s; }
+      for (let c = 0; c < 4; c++) { let s = 0; for (let k = 0; k < 3; k++) s += B[k * 8 + r] * DBa[k * 4 + c]; Kua[r * 4 + c] += s; }
+    }
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { let s = 0; for (let k = 0; k < 3; k++) s += Ba[k * 4 + r] * DBa[k * 4 + c]; Kaa[r * 4 + c] += s; }
+  }
+  // X = Kaa⁻¹ · Kauᵀ (4×8) por eliminação de Gauss; K = Kuu − Kua · X
+  const A = Float64Array.from(Kaa), X = new Float64Array(32);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 8; c++) X[r * 8 + c] = Kua[c * 4 + r];
+  for (let k = 0; k < 4; k++) {
+    let piv = k;
+    for (let r = k + 1; r < 4; r++) if (Math.abs(A[r * 4 + k]) > Math.abs(A[piv * 4 + k])) piv = r;
+    if (piv !== k) {
+      for (let c = 0; c < 4; c++) { const t = A[k * 4 + c]; A[k * 4 + c] = A[piv * 4 + c]; A[piv * 4 + c] = t; }
+      for (let c = 0; c < 8; c++) { const t = X[k * 8 + c]; X[k * 8 + c] = X[piv * 8 + c]; X[piv * 8 + c] = t; }
+    }
+    for (let r = k + 1; r < 4; r++) {
+      const f = A[r * 4 + k] / A[k * 4 + k];
+      for (let c = k; c < 4; c++) A[r * 4 + c] -= f * A[k * 4 + c];
+      for (let c = 0; c < 8; c++) X[r * 8 + c] -= f * X[k * 8 + c];
+    }
+  }
+  for (let k = 3; k >= 0; k--) {
+    for (let c = 0; c < 8; c++) {
+      let s = X[k * 8 + c];
+      for (let j = k + 1; j < 4; j++) s -= A[k * 4 + j] * X[j * 8 + c];
+      X[k * 8 + c] = s / A[k * 4 + k];
+    }
+  }
+  const KE = new Float64Array(64);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    let s = Kuu[r * 8 + c];
+    for (let k = 0; k < 4; k++) s -= Kua[r * 4 + k] * X[k * 8 + c];
+    KE[r * 8 + c] = s;
+  }
+  // simetriza (remove ruído numérico)
+  for (let r = 0; r < 8; r++) for (let c = r + 1; c < 8; c++) { const m = 0.5 * (KE[r * 8 + c] + KE[c * 8 + r]); KE[r * 8 + c] = m; KE[c * 8 + r] = m; }
+  return KE;
+}
+
+export function elementStiffnessQ4(nu: number): Float64Array {
   const A11 = [12, 3, -6, -3, 3, 12, 3, 0, -6, 3, 12, -3, -3, 0, -3, 12];
   const A12 = [-6, -3, 0, 3, -3, -6, -3, -6, 0, -3, -6, 3, 3, -6, 3, -6];
   const B11 = [-4, 3, -2, 9, 3, -4, -9, 4, -2, -9, -4, -3, 9, 4, -3, -4];
