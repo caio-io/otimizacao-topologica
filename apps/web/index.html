@@ -41,6 +41,12 @@
     tr.tirante td { color: #a93226; } tr.biela td { color: #1a4f9c; } tr.nula td { color: #8a8f98; }
     #stm .warn { background: #fff4d6; color: #6b4e00; padding: 4px 8px; border-radius: 4px; }
     button:disabled { opacity: .45; cursor: not-allowed; }
+    #tip { position: fixed; z-index: 20; display: none; pointer-events: none; max-width: 300px; padding: 6px 9px; border-radius: 5px;
+           background: rgba(28,36,48,.94); color: #f3f5f8; font: 12px/1.45 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+    #tip b { color: #ffd479; } #tip .k { color: #9fb0c3; }
+    .barrow { display: grid; grid-template-columns: 1.5fr 1.1fr 0.9fr 0.9fr; gap: 3px 6px; align-items: center; }
+    .barrow.hl small { font-weight: 700; color: #1f5fbf; }
+    .barrow select, .barrow input { margin-top: 0; font-size: 12px; padding: 1px 2px; }
   </style>
 </head>
 <body>
@@ -107,6 +113,7 @@
       <option value="s2">Mapa σ2 (compressão)</option>
       <option value="nlconc">Nível 2: deformação do concreto</option>
       <option value="nlcrack">Nível 2: fissuração e armadura</option>
+      <option value="nlstress">Nível 2: tensões do concreto</option>
     </select>
     <label class="chk"><input id="showMesh" type="checkbox" /> Mostrar malha de elementos finitos</label>
     <label>Iteração (histórico) <input id="frame" type="range" min="0" max="0" value="0" /></label>
@@ -122,6 +129,7 @@
       <div id="msg"></div>
     </div>
   </main>
+  <div id="tip"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

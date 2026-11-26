@@ -48,8 +48,12 @@ export interface BarSpec {
   label: string;
   /** poligonal em coordenadas da cena [m]; precisa ficar dentro da geometria */
   path: [number, number][];
+  /** polilinhas adicionais do mesmo grupo (mesma área e aço): estribos, barras repetidas */
+  extra?: [number, number][][];
   /** área TOTAL da armadura da barra [cm²] (já somadas as barras ao longo da espessura) */
   areaCm2: number;
+  /** classe do aço: CA-50 / CA-60 (valores de projeto, definidos em `STEEL_CLASSES`) ou "custom" (valores abaixo, p. ex. medidos em ensaio) */
+  steelClass?: "CA50" | "CA60" | "custom";
   /** escoamento e resistência à tração [MPa], módulo [GPa], deformação de ruptura (fração) */
   fy: number; ft: number; Es: number; epsU: number;
 }

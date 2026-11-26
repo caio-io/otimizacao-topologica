@@ -108,7 +108,7 @@ Cada etapa é conferida contra a literatura. Os números completos, com limites 
 3. Clique em **Rodar análise não linear**. A carga cresce em passos e a tela mostra a evolução; **Parar** interrompe.
 4. Veja os resultados: carga aplicada (λ × 4000 kN de referência), modo de ruptura, tabela de barras (força máxima, deformação, se escoou), reações. Em *Visualização*: **Nível 2: deformação do concreto** (as bielas aparecem em vermelho) e **Nível 2: fissuração e armadura** (azul = fissurado; barras verde → vermelho = 0 → 100 % de fy).
 
-Referência do exemplo: ensaio de **556 kN por apoio real** (2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm leva ≈ 10 s; 20 mm, ≈ 4 min. **Não é a verificação CSFM completa** (sem kc2, sem tension stiffening, sem ELS) e a armadura do exemplo foi lida de figuras. Ainda não dá para desenhar barras na tela: elas vêm do exemplo.
+Referência do exemplo: ensaio de **556 kN por apoio real** (2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm leva ≈ 10 s; 20 mm, ≈ 4 min. **Não é a verificação CSFM completa** (sem kc2, sem tension stiffening, sem ELS) e a armadura do exemplo foi lida de figuras. Cada barra aparece **identificada na tela** e na lista, com classe de aço **CA-50 / CA-60** (valores de projeto) ou *Ensaio*. **Passe o mouse** sobre o concreto ou sobre uma barra: a dica mostra a fissuração, as tensões e o cisalhamento (conforme a vista escolhida) ou a força e a tensão da barra. Ainda não dá para desenhar barras na tela: elas vêm do exemplo.
 </details>
 
 <details>
@@ -180,7 +180,9 @@ $env:GERAR_IMG=1;   npx vitest run test/imagens.test.ts             # regenera a
 - [ ] **Nível 4:** tension stiffening e abertura de fissura (ELS)
 - [ ] Extração do modelo de bielas e tirantes por *ground structure* (Brito, 2026)
 - [x] Interface do Nível 2 no editor: exemplo S1, painel de resultados, vistas de deformação e fissuração
-- [ ] Desenhar e editar barras de armadura na tela (hoje só a área e o fy, a partir dos exemplos)
+- [x] Busca linear no solver (S1 até 4× mais rápida) e classes de aço CA-50/CA-60
+- [ ] **Nó de pórtico** (canto pilar + viga): modelo montado no código, mas a análise **ainda não converge** (em investigação; não está na lista de exemplos)
+- [ ] Desenhar e editar barras de armadura na tela (hoje só a classe, a área e o fy, a partir dos exemplos)
 
 ## 📚 Documentação
 
@@ -189,6 +191,7 @@ $env:GERAR_IMG=1;   npx vitest run test/imagens.test.ts             # regenera a
 | [`docs/csfm-roteiro.md`](docs/csfm-roteiro.md) | decisões, fórmulas confirmadas nas fontes, calibrações e o Nível 2 |
 | [`docs/csfm-guia.md`](docs/csfm-guia.md) | o que o CSFM é e o que isso muda no desenvolvimento |
 | [`docs/referencias.md`](docs/referencias.md) | fontes consultadas e conferência de um resumo externo |
+| [`docs/prompt-pesquisa-discretizacao.md`](docs/prompt-pesquisa-discretizacao.md) | prompt para pedir a uma IA o levantamento de discretização e parâmetros em aberto |
 | [`docs/estado-do-projeto.md`](docs/estado-do-projeto.md) | passagem de bastão: stack, estrutura, histórico |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | arquitetura e visão de produto |
 

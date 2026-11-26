@@ -39,6 +39,17 @@ export interface SteelLaw {
 /** Aço CA-50 com valores de projeto: fyd = 500/1,15, ft = 1,08·fy, Es = 210 GPa, εu = 5 %. */
 export const ca50: SteelLaw = { fy: 500e3 / 1.15, ft: 1.08 * (500e3 / 1.15), Es: 210e6, epsU: 0.05 };
 
+/**
+ * Aços passivos usuais no Brasil (valores de PROJETO: fyd = fyk/1,15). A relação ft/fy e a deformação de ruptura são
+ * valores ASSUMIDOS (CA-50: ft = 1,08·fy, εu = 5 %; CA-60: ft = 1,05·fy, εu = 2,5 %, coerentes com as classes de ductilidade
+ * B e A do fib Model Code 2010) — confirmar na NBR 7480.
+ */
+export const STEEL_CLASSES = {
+  CA50: { label: "CA-50", fy: 500 / 1.15, ft: (1.08 * 500) / 1.15, Es: 210, epsU: 0.05 },
+  CA60: { label: "CA-60", fy: 600 / 1.15, ft: (1.05 * 600) / 1.15, Es: 210, epsU: 0.025 },
+} as const;
+export type SteelClass = keyof typeof STEEL_CLASSES;
+
 export interface Bar {
   /** extremidades em coordenadas da cena; a barra precisa ser horizontal ou vertical e estar sobre linhas da malha */
   x0: number; y0: number; x1: number; y1: number;
@@ -52,6 +63,8 @@ export interface Bar {
    * Sem `path`, a barra tem de ser horizontal/vertical sobre linhas da malha (elementos de treliça).
    */
   path?: [number, number][];
+  /** polilinhas adicionais com a mesma área e aço (grupo de barras iguais, p. ex. estribos); só vale com `path` */
+  more?: [number, number][][];
 }
 
 export interface NlOptions {
@@ -75,6 +88,8 @@ export interface NlOptions {
   tol?: number;
   /** emite um `NlStep` a cada passo convergido (uso em `solveNonlinearSteps`, p. ex. para mostrar o progresso) */
   stepwise?: boolean;
+  /** busca linear: se o passo completo de correção piora o equilíbrio, testa frações (1/2, 1/4, 1/8, 1/16) e fica com a melhor (padrão: sim) */
+  lineSearch?: boolean;
   /** usa a rigidez tangente (com piso) no lugar da secante; converge bem mais perto do patamar (padrão: sim) */
   tangent?: boolean;
   maxIt?: number;
@@ -107,8 +122,12 @@ export interface NlResult {
   barSamples: { x: number; y: number; N: number }[][];
   /** deformação de compressão usada no critério de esmagamento (média na janela, se `crushLength`) */
   crushStrain: number;
+  /** tensões médias do concreto por elemento [σx, σy, τxy] em kN/m², 3 valores por elemento */
+  stress: Float64Array;
   /** avisos (p. ex. trechos de barra ligados ao elemento vizinho numa malha grossa) */
   notes: string[];
+  /** iterações totais de equilíbrio e avaliações extras da busca linear (diagnóstico de desempenho) */
+  work: { iterations: number; lineSearchTrials: number };
 }
 
 /** estado de um passo de carga convergido (só emitido com `stepwise: true`) */
@@ -116,7 +135,7 @@ export interface NlStep {
   lambda: number; its: number;
   u: Float64Array; epsComp: Float64Array; epsTens: Float64Array;
   barSamples: { x: number; y: number; N: number }[][];
-  maxEpsC: number; crushStrain: number; notes: string[];
+  maxEpsC: number; crushStrain: number; notes: string[]; stress: Float64Array;
 }
 
 interface BarEl { a: number; b: number; cx: number; cy: number; bar: number }
@@ -176,7 +195,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const nodeId = (i: number, j: number) => i * (nely + 1) + j;
   const barEls: BarEl[] = [];
   bars.forEach((bar, k) => {
-    if (bar.path) return;
+    if (bar.path || bar.more) return;
     const ci = (x: number) => Math.round((x - origin.x) / h), cj = (y: number) => nely - Math.round((y - origin.y) / h);
     const i0 = ci(bar.x0), i1 = ci(bar.x1), j0 = cj(bar.y0), j1 = cj(bar.y1);
     const onGrid = Math.abs(origin.x + i0 * h - bar.x0) < 1e-6 && Math.abs(origin.x + i1 * h - bar.x1) < 1e-6
@@ -197,8 +216,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   let projected = 0; // trechos cujo elemento natural é vazio (malha grossa) e foram ligados ao elemento de concreto vizinho
   bars.forEach((bar, k) => {
     if (!bar.path) return;
-    for (let q = 0; q + 1 < bar.path.length; q++) {
-      const [xa, ya] = bar.path[q], [xb, yb] = bar.path[q + 1];
+    for (const path of [bar.path, ...(bar.more ?? [])]) for (let q = 0; q + 1 < path.length; q++) {
+      const [xa, ya] = path[q], [xb, yb] = path[q + 1];
       const L = Math.hypot(xb - xa, yb - ya);
       if (L < 1e-9) continue;
       const n = Math.max(1, Math.ceil(L / (h / 4))), len = L / n, cs = (xb - xa) / L, sn = (yb - ya) / L;
@@ -265,13 +284,15 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
   }
 
-  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
+  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
 
-  const assemble = (u: Float64Array): Asm => {
-    const L = new Float64Array(ndof * w);
+  const NOMAT = new Float64Array(0);
+  /** needK = false: só forças internas e indicadores (para testar passos da busca linear, sem montar a matriz) */
+  const assemble = (u: Float64Array, needK = true): Asm => {
+    const L = needK ? new Float64Array(ndof * w) : NOMAT;
     const fint = new Float64Array(ndof);
     let maxEpsC = 0;
-    const epsEl = new Float64Array(nelx * nely), epsT = new Float64Array(nelx * nely);
+    const epsEl = new Float64Array(nelx * nely), epsT = new Float64Array(nelx * nely), sEl = new Float64Array(3 * nelx * nely);
     const ue = new Float64Array(8), Ke = new Float64Array(64), B = new Float64Array(24), DB = new Float64Array(24), fe = new Float64Array(8);
     for (let e = 0; e < nelx * nely; e++) {
       if (p.mask[e] === 0) continue;
@@ -308,6 +329,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
         // σ global (coaxial) e D secante = Tεᵀ·diag(E1,E3,G)·Tε
         const sx = s1 * cs * cs + s3 * sn * sn, sy = s1 * sn * sn + s3 * cs * cs, tx = (s1 - s3) * sn * cs;
         const sc = sn * cs, c2 = cs * cs, s2 = sn * sn;
+        sEl[3 * e] += sx / 4; sEl[3 * e + 1] += sy / 4; sEl[3 * e + 2] += tx / 4;
         const r1 = [c2, s2, sc], r3 = [s2, c2, -sc], rg = [-2 * sc, 2 * sc, c2 - s2];
         const D = new Float64Array(9);
         for (let r = 0; r < 3; r++) for (let q = 0; q < 3; q++) D[r * 3 + q] = E1 * r1[r] * r1[q] + E3 * r3[r] * r3[q] + Gs * rg[r] * rg[q];
@@ -317,16 +339,16 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
           const nx = dNx[g * 4 + a], ny = dNy[g * 4 + a];
           B[2 * a] = nx; B[8 + 2 * a + 1] = ny; B[16 + 2 * a] = ny; B[16 + 2 * a + 1] = nx;
         }
-        for (let r = 0; r < 3; r++) for (let q = 0; q < 8; q++) DB[r * 8 + q] = D[r * 3] * B[q] + D[r * 3 + 1] * B[8 + q] + D[r * 3 + 2] * B[16 + q];
+        if (needK) for (let r = 0; r < 3; r++) for (let q = 0; q < 8; q++) DB[r * 8 + q] = D[r * 3] * B[q] + D[r * 3 + 1] * B[8 + q] + D[r * 3 + 2] * B[16 + q];
         for (let r = 0; r < 8; r++) {
           fe[r] += (B[r] * sx + B[8 + r] * sy + B[16 + r] * tx) * dV;
-          for (let q = 0; q < 8; q++) Ke[r * 8 + q] += (B[r] * DB[q] + B[8 + r] * DB[8 + q] + B[16 + r] * DB[16 + q]) * dV;
+          if (needK) for (let q = 0; q < 8; q++) Ke[r * 8 + q] += (B[r] * DB[q] + B[8 + r] * DB[8 + q] + B[16 + r] * DB[16 + q]) * dV;
         }
       }
       for (let a = 0; a < 8; a++) {
         const i = edof[b0 + a];
         fint[i] += fe[a];
-        if (fixedEff[i]) continue;
+        if (!needK || fixedEff[i]) continue;
         for (let q = 0; q < 8; q++) {
           const j = edof[b0 + q];
           if (j > i || fixedEff[j]) continue;
@@ -351,7 +373,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       const dir = [-be.cx, -be.cy, be.cx, be.cy];
       for (let a = 0; a < 4; a++) {
         fint[da[a]] += N * dir[a];
-        if (fixedEff[da[a]]) continue;
+        if (!needK || fixedEff[da[a]]) continue;
         for (let q = 0; q < 4; q++) {
           if (da[q] > da[a] || fixedEff[da[q]]) continue;
           L[da[a] * w + (bw - (da[a] - da[q]))] += k * dir[a] * dir[q];
@@ -371,7 +393,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       for (let a = 0; a < 8; a++) {
         const i = edof[b0 + a];
         fint[i] += N * pc.len * pc.g[a];
-        if (fixedEff[i]) continue;
+        if (!needK || fixedEff[i]) continue;
         for (let q = 0; q < 8; q++) {
           const j = edof[b0 + q];
           if (j > i || fixedEff[j]) continue;
@@ -380,27 +402,50 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       }
     }
     perBar.forEach((arr, k) => { barForces[k] = Float64Array.from(arr); });
-    return { L, fint, maxEpsC, epsEl, epsT, barForces, barEps, yielded };
+    return { L, fint, maxEpsC, epsEl, epsT, sEl, barForces, barEps, yielded };
   };
 
   // ---- equilíbrio em um nível de carga: correção pelo resíduo com rigidez secante
   const rhsLam = new Float64Array(ndof), du = new Float64Array(ndof), R = new Float64Array(ndof);
+  const useLS = opt.lineSearch ?? true;
+  let lsTrials = 0; // total de avaliações extras de resíduo feitas pela busca linear (diagnóstico)
   const equilibrate = (lam: number, u0: Float64Array) => {
-    const u = u0.slice();
+    let u = u0.slice();
     let nf = 0;
     for (let d = 0; d < ndof; d++) { rhsLam[d] = fixedEff[d] ? 0 : lam * fRef[d]; nf += rhsLam[d] * rhsLam[d]; }
     nf = Math.sqrt(nf) || 1;
+    const resNorm = (a: { fint: Float64Array }) => {
+      let n = 0;
+      for (let d = 0; d < ndof; d++) { const r = fixedEff[d] ? 0 : rhsLam[d] - a.fint[d]; n += r * r; }
+      return Math.sqrt(n);
+    };
     let asm = assemble(u), rel = Infinity, its = 0;
     for (; its < maxIt; its++) {
       let nr = 0;
       for (let d = 0; d < ndof; d++) { R[d] = fixedEff[d] ? 0 : rhsLam[d] - asm.fint[d]; nr += R[d] * R[d]; }
-      rel = Math.sqrt(nr) / nf;
+      nr = Math.sqrt(nr);
+      rel = nr / nf;
       if (rel < tol) return { ok: true, u, asm, rel, its };
       solveBandedAssembled(asm.L, ndof, bw, fixedEff, R, du);
-      let bad = false;
-      for (let d = 0; d < ndof; d++) { u[d] += du[d]; if (!Number.isFinite(u[d])) bad = true; }
+      // passo completo; com busca linear, se não reduz o resíduo tenta frações do passo e fica com a melhor
+      let uTry = u.map((v, d) => v + du[d]), bad = uTry.some((v) => !Number.isFinite(v));
       if (bad) return { ok: false, u, asm, rel, its };
-      asm = assemble(u);
+      let asmTry = assemble(uTry);
+      if (useLS) {
+        const n1 = resNorm(asmTry);
+        if (!(n1 < nr)) {
+          let bestA = 1, bestN = n1;
+          for (const a of [0.5, 0.25, 0.125, 0.0625]) {
+            lsTrials++;
+            const ua = u.map((v, d) => v + a * du[d]);
+            const n = resNorm(assemble(ua, false));
+            if (n < bestN) { bestN = n; bestA = a; }
+            if (n < nr) break; // reduziu: basta
+          }
+          if (bestA !== 1) { uTry = u.map((v, d) => v + bestA * du[d]); asmTry = assemble(uTry); }
+        }
+      }
+      u = uTry; asm = asmTry;
     }
     return { ok: false, u, asm, rel, its };
   };
@@ -432,7 +477,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
     lamGood = lamTry; uGood = eq.u; asmGood = eq.asm;
     steps.push({ lambda: lamGood, its: eq.its, rel: eq.rel });
-    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes };
+    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice() };
     if (lamGood >= lamMax) { mode = "lambdaMax"; break; }
     if (!everFailed && eq.its <= 6) dl *= 1.5;
   }
@@ -459,7 +504,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     maxCompStrain: asmGood.maxEpsC,
     equilibrium: { x: eqx, y: eqy },
     steps, barForces: asmGood.barForces, reaction,
-    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes,
+    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl,
+    work: { iterations: steps.reduce((a, s) => a + s.its, 0), lineSearchTrials: lsTrials },
   };
 }
 
@@ -474,7 +520,7 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
 /** barras da cena (cm², MPa, GPa) → barras do solver (m², kN/m²) */
 export function barsFromScene(s: Scene): Bar[] {
   return (s.bars ?? []).map((b) => ({
-    x0: 0, y0: 0, x1: 0, y1: 0, path: b.path, area: b.areaCm2 * 1e-4, label: b.label,
+    x0: 0, y0: 0, x1: 0, y1: 0, path: b.path, more: b.extra, area: b.areaCm2 * 1e-4, label: b.label,
     steel: { fy: b.fy * 1e3, ft: b.ft * 1e3, Es: b.Es * 1e6, epsU: b.epsU },
   }));
 }

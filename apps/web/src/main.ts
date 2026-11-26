@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { STEEL_CLASSES, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -53,13 +53,14 @@ interface Msg {
 }
 interface NlInfo {
   lambda: number; mode: "CC" | "FR" | "divergencia" | "lambdaMax" | "interrompida" | null;
-  epsComp: Float64Array; epsTens: Float64Array; barSamples: { x: number; y: number; N: number }[][]; bars: NlBarResult[];
+  epsComp: Float64Array; epsTens: Float64Array; stress: Float64Array; barSamples: { x: number; y: number; N: number }[][]; bars: NlBarResult[];
   maxEpsC: number; crushStrain: number; epsCu: number; fc: number; crushLength: number; equilibrium: { x: number; y: number };
 }
 const frames: Msg[] = [];
 type CsfmData = ReturnType<typeof tensionZones>;
 const csfmData = new WeakMap<Msg, CsfmData>();
 let pendingCsfm = false;
+let hoverBar: string | null = null;
 const NL_LABEL = "Rodar análise não linear";
 const slider = $<HTMLInputElement>("frame");
 
@@ -122,15 +123,30 @@ function drawGeometry() {
   }
 }
 
+/** tensões principais do elemento e a partir de [σx, σy, τxy] médios (kN/m²) */
+function princ(stress: Float64Array, e: number) {
+  const sx = stress[3 * e], sy = stress[3 * e + 1], t = stress[3 * e + 2], avg = (sx + sy) / 2, rad = Math.hypot((sx - sy) / 2, t);
+  return { sx, sy, t, s1: avg + rad, s3: avg - rad, tmax: rad };
+}
+
 /** armadura da cena; com resultado não linear, cada trecho é colorido por σ/fy (tração: verde→vermelho; compressão: azul) */
 function drawBars(m?: Msg) {
   const bars = scene.bars ?? [];
   if (!bars.length) return;
   ctx.save(); ctx.lineCap = "round"; ctx.lineJoin = "round";
   bars.forEach((b, k) => {
+    const hl = hoverBar === b.id;
     ctx.beginPath(); b.path.forEach(([x, y], i) => (i ? ctx.lineTo(wx(x), wy(y)) : ctx.moveTo(wx(x), wy(y))));
-    ctx.strokeStyle = m?.nl ? "rgba(40,40,40,.55)" : "#8a2a1d"; ctx.lineWidth = m?.nl ? 1 : Math.max(1.5, Math.min(4, Math.sqrt(b.areaCm2)));
+    ctx.strokeStyle = hl ? "#1f5fbf" : m?.nl ? "rgba(40,40,40,.55)" : "#8a2a1d"; ctx.lineWidth = hl ? 3.5 : m?.nl ? 1 : Math.max(1.5, Math.min(4, Math.sqrt(b.areaCm2)));
     ctx.stroke();
+    // identificação: rótulo no meio do maior trecho da barra
+    let bi = 0, bl = 0;
+    for (let q = 0; q + 1 < b.path.length; q++) { const l = Math.hypot(b.path[q + 1][0] - b.path[q][0], b.path[q + 1][1] - b.path[q][1]); if (l > bl) { bl = l; bi = q; } }
+    if (b.path.length > 1) {
+      const lx = wx((b.path[bi][0] + b.path[bi + 1][0]) / 2), ly = wy((b.path[bi][1] + b.path[bi + 1][1]) / 2);
+      ctx.font = `${hl ? "bold " : ""}10px system-ui`; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.strokeText(b.label, lx + 3, ly - 3);
+      ctx.fillStyle = hl ? "#1f5fbf" : "#5a1a12"; ctx.fillText(b.label, lx + 3, ly - 3);
+    }
     const samples = m?.nl?.barSamples[k];
     if (!samples) return;
     const Afy = b.areaCm2 * 1e-4 * b.fy * 1e3;
@@ -152,7 +168,7 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
   const solidIdx: number[] = [];
   for (let e = 0; e < m.mask.length; e++) if (solidAt(m, e)) solidIdx.push(e);
 
-  if (mode === "nlconc" || mode === "nlcrack") {
+  if (mode === "nlconc" || mode === "nlcrack" || mode === "nlstress") {
     const nl = m.nl;
     for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
       const e = i * nely + j;
@@ -163,12 +179,15 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
         col = r < 0.02 ? "#e9edf2" : r >= 1 ? "#7b1e12" : `rgb(255,${Math.round(238 - 205 * r)},${Math.round(232 - 215 * r)})`;
       } else if (nl && mode === "nlcrack") {
         col = nl.epsTens[e] > 2e-5 ? "#bcd6f2" : "#e9edf2";
+      } else if (nl && mode === "nlstress") {
+        const { s3 } = princ(nl.stress, e), r = Math.min(1.2, Math.max(0, -s3) / nl.fc);
+        col = r < 0.02 ? "#e9edf2" : r >= 1 ? "#7b1e12" : `rgb(255,${Math.round(238 - 205 * r)},${Math.round(232 - 215 * r)})`;
       }
       ctx.fillStyle = col; ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
       if (showMesh) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.lineWidth = 0.5; ctx.strokeRect(X(i), Y(j), px, px); }
     }
     ctx.fillStyle = "#1c2430"; ctx.font = "12px system-ui";
-    ctx.fillText(nl ? (mode === "nlconc" ? `Deformação de compressão média / εcu (${(nl.epsCu * 1000).toFixed(1)} ‰): cinza → vermelho; marrom = esmagado` : "Azul: concreto fissurado (tração principal > 0) · barras: verde → vermelho = 0 → 100 % de fy; azul = compressão") : "Rode a análise não linear.", 14, cv.height - 30);
+    ctx.fillText(nl ? (mode === "nlstress" ? `Tensão principal de compressão / fc (${(nl.fc / 1000).toFixed(1)} MPa): cinza → vermelho; passe o mouse para ver σ1, σ3 e cisalhamento` : mode === "nlconc" ? `Deformação de compressão média / εcu (${(nl.epsCu * 1000).toFixed(1)} ‰): cinza → vermelho; marrom = esmagado` : "Azul: concreto fissurado (tração principal > 0) · barras: verde → vermelho = 0 → 100 % de fy; azul = compressão") : "Rode a análise não linear.", 14, cv.height - 30);
     return;
   }
 
@@ -794,18 +813,29 @@ function renderNl() {
 function renderBars() {
   const el = $("barsList"), bars = scene.bars ?? [];
   if (!bars.length) { el.innerHTML = '<small class="note">Este exemplo não tem armadura: a análise considera só o concreto (sem tração).</small>'; return; }
-  el.innerHTML = '<h2 style="margin-top:10px">Armadura</h2>';
-  const g = document.createElement("div"); g.className = "grid2"; g.style.gridTemplateColumns = "1.4fr 1fr 1fr";
+  el.innerHTML = '<h2 style="margin-top:10px">Armadura</h2><small class="note">Aço passivo: CA-50 ou CA-60 (valores de projeto, fyk/1,15). “Ensaio” usa valores medidos do exemplo. Passe o mouse na barra para identificá-la.</small>';
+  const g = document.createElement("div"); g.className = "barrow"; g.style.marginTop = "4px";
   const head = (t: string) => { const d = document.createElement("small"); d.className = "note"; d.textContent = t; g.appendChild(d); };
-  head("barra"); head("As (cm²)"); head("fy (MPa)");
+  head("barra"); head("aço"); head("As (cm²)"); head("fy (MPa)");
   for (const b of bars) {
-    const name = document.createElement("small"); name.textContent = b.label; name.title = `${b.path.length} pontos · aderência perfeita`; g.appendChild(name);
-    const mk = (get: () => number, set: (v: number) => void) => {
-      const i = document.createElement("input"); i.type = "number"; i.step = "any"; i.min = "0"; i.value = String(Math.round(get() * 1000) / 1000);
-      i.onchange = () => { const v = +i.value; if (v > 0) { set(v); changed(); } else i.value = String(get()); };
-      g.appendChild(i);
+    const row: HTMLElement[] = [];
+    const name = document.createElement("small"); name.textContent = b.label; name.title = `${b.id} · ${b.path.length} pontos · aderência perfeita`; row.push(name);
+    const sel2 = document.createElement("select");
+    for (const [v, t] of [["CA50", "CA-50"], ["CA60", "CA-60"], ["custom", "Ensaio"]] as const) sel2.add(new Option(t, v));
+    sel2.value = b.steelClass ?? "custom";
+    sel2.onchange = () => {
+      const v = sel2.value as "CA50" | "CA60" | "custom"; b.steelClass = v;
+      if (v !== "custom") { const c = STEEL_CLASSES[v]; b.fy = c.fy; b.ft = c.ft; b.Es = c.Es; b.epsU = c.epsU; }
+      changed(); renderBars();
     };
-    mk(() => b.areaCm2, (v) => (b.areaCm2 = v)); mk(() => b.fy, (v) => { b.fy = v; b.ft = Math.max(b.ft, v * 1.05); });
+    row.push(sel2);
+    const area = document.createElement("input"); area.type = "number"; area.step = "any"; area.min = "0"; area.value = String(Math.round(b.areaCm2 * 1000) / 1000);
+    area.onchange = () => { const v = +area.value; if (v > 0) { b.areaCm2 = v; changed(); } else area.value = String(b.areaCm2); };
+    row.push(area);
+    const fy = document.createElement("input"); fy.type = "number"; fy.step = "any"; fy.min = "0"; fy.value = String(Math.round(b.fy * 10) / 10); fy.disabled = (b.steelClass ?? "custom") !== "custom";
+    fy.onchange = () => { const v = +fy.value; if (v > 0) { b.fy = v; b.ft = Math.max(b.ft, v * 1.05); changed(); } else fy.value = String(b.fy); };
+    row.push(fy);
+    for (const c of row) { c.onmouseenter = () => { hoverBar = b.id; draw(); }; c.onmouseleave = () => { hoverBar = null; draw(); }; g.appendChild(c); }
   }
   el.appendChild(g);
 }
@@ -826,6 +856,76 @@ $("nl").onclick = () => {
   $("nl").textContent = "Parar";
   send({ mode: "nl", scene });
 };
+
+/* ───────────────────────── dica ao passar o mouse ───────────────────────── */
+const tipEl = $("tip");
+const MPa = (v: number) => (v / 1000).toFixed(2);
+function hideTip() { tipEl.style.display = "none"; if (hoverBar !== null && !(document.querySelector(".barrow:hover"))) { hoverBar = null; draw(); } }
+function barTip(px: number, py: number, m?: Msg): string | null {
+  const bars = scene.bars ?? [];
+  let best: { k: number; q: number; d: number } | null = null;
+  bars.forEach((b, k) => {
+    const samples = m?.nl?.barSamples[k];
+    if (samples) samples.forEach((sp, q) => { const d = Math.hypot(wx(sp.x) - px, wy(sp.y) - py); if (!best || d < best.d) best = { k, q, d }; });
+    else for (let q = 0; q + 1 < b.path.length; q++) { const d = distSeg(px, py, wx(b.path[q][0]), wy(b.path[q][1]), wx(b.path[q + 1][0]), wy(b.path[q + 1][1])); if (!best || d < best.d) best = { k, q, d }; }
+  });
+  const hit = best as { k: number; q: number; d: number } | null;
+  const prevHover = hoverBar;
+  if (!hit || hit.d > 7) { if (prevHover !== null) { hoverBar = null; draw(); } return null; }
+  const b = bars[hit.k];
+  if (hoverBar !== b.id) { hoverBar = b.id; draw(); }
+  const cls = b.steelClass && b.steelClass !== "custom" ? STEEL_CLASSES[b.steelClass].label : "ensaio";
+  let h = `<b>${esc(b.label)}</b> <span class="k">(${esc(b.id)})</span><br>Aço ${cls} · As = ${b.areaCm2.toFixed(2)} cm² · fy = ${b.fy.toFixed(0)} MPa`;
+  const sp = m?.nl?.barSamples[hit.k]?.[hit.q];
+  if (sp) {
+    const sig = (sp.N / (b.areaCm2 * 1e-4)) / 1000;
+    h += `<br>Força axial ${sp.N.toFixed(1)} kN (${sp.N >= 0 ? "tração" : "compressão"}) · σ = ${sig.toFixed(0)} MPa = ${(Math.abs(sig) / b.fy * 100).toFixed(0)} % de fy${Math.abs(sig) >= b.fy * 0.999 ? " — <b>escoou</b>" : ""}`;
+  }
+  return h;
+}
+function elemTip(px: number, py: number, m: Msg): string | null {
+  const { nelx, nely, h, ox, oy } = m.dims;
+  const [x, y] = toWorld(px, py);
+  const i = Math.floor((x - ox) / h), jy = Math.floor((y - oy) / h), j = nely - 1 - jy;
+  if (i < 0 || i >= nelx || jy < 0 || jy >= nely) return null;
+  const e = i * nely + j;
+  if (m.mask[e] === 0) return null;
+  const mode = $<HTMLSelectElement>("view").value, nl = m.nl;
+  const head = `<span class="k">elemento ${i},${jy} · x = ${(ox + (i + 0.5) * h).toFixed(3)} m, y = ${(oy + (jy + 0.5) * h).toFixed(3)} m</span><br>`;
+  if (mode.startsWith("nl")) {
+    if (!nl) return head + "Rode a análise não linear para ver os resultados.";
+    if (mode === "nlcrack") {
+      const t = nl.epsTens[e], cracked = t > 2e-5;
+      return head + `<b>${cracked ? "Concreto fissurado" : "Não fissurado"}</b><br>Tração principal ε1 = ${(t * 1000).toFixed(2)} ‰<br>Compressão principal ε3 = ${(nl.epsComp[e] * 1000).toFixed(2)} ‰` + (cracked ? '<br><span class="k">fissura perpendicular à tração principal; o concreto não resiste à tração</span>' : "");
+    }
+    if (mode === "nlstress") {
+      const s = princ(nl.stress, e);
+      return head + `σ1 = ${MPa(s.s1)} MPa · σ3 = ${MPa(s.s3)} MPa <span class="k">(− compressão)</span><br><b>Cisalhamento máx. τ = ${MPa(s.tmax)} MPa</b> · σ3/fc = ${(Math.max(0, -s.s3) / nl.fc * 100).toFixed(0)} %<br><span class="k">σx = ${MPa(s.sx)} · σy = ${MPa(s.sy)} · τxy = ${MPa(s.t)} MPa</span>`;
+    }
+    return head + `<b>Compressão principal ε3 = ${(nl.epsComp[e] * 1000).toFixed(2)} ‰</b> (${(nl.epsComp[e] / nl.epsCu * 100).toFixed(0)} % de εcu = ${(nl.epsCu * 1000).toFixed(1)} ‰)<br>Tração principal ε1 = ${(nl.epsTens[e] * 1000).toFixed(2)} ‰ ${nl.epsTens[e] > 2e-5 ? "(fissurado)" : ""}`;
+  }
+  if (mode === "s1" || mode === "s2" || mode === "topo" || mode === "csfm") {
+    const s1 = m.field.s1[e], s2 = m.field.s2[e];
+    return head + `σ1 = ${MPa(s1)} MPa (tração) · σ2 = ${MPa(s2)} MPa (compressão)<br><b>Cisalhamento máx. τ = ${MPa((s1 - s2) / 2)} MPa</b> · direção σ1 = ${((m.field.theta[e] * 180) / Math.PI).toFixed(0)}°` + (m.elastic || mode !== "topo" ? "" : `<br>densidade ${m.rho[e].toFixed(2)}`);
+  }
+  if (mode === "def") {
+    const n = i * (nely + 1) + j; let ux = 0, uy = 0;
+    for (const d of [n, n + 1, n + nely + 1, n + nely + 2]) { ux += m.u[2 * d] / 4; uy += m.u[2 * d + 1] / 4; }
+    return head + `Deslocamento: ux = ${(ux * 1000).toFixed(2)} mm · uy = ${(uy * 1000).toFixed(2)} mm`;
+  }
+  return null;
+}
+cv.addEventListener("mousemove", (ev) => {
+  if (tool !== "select" || drag || panning) { tipEl.style.display = "none"; return; }
+  const [px, py] = evPos(ev), m = frames[+slider.value];
+  const html = barTip(px, py, m) ?? (m ? elemTip(px, py, m) : null);
+  if (!html) { tipEl.style.display = "none"; return; }
+  tipEl.innerHTML = html; tipEl.style.display = "block";
+  const w = tipEl.offsetWidth, hgt = tipEl.offsetHeight;
+  tipEl.style.left = Math.min(window.innerWidth - w - 8, ev.clientX + 16) + "px";
+  tipEl.style.top = Math.min(window.innerHeight - hgt - 8, ev.clientY + 16) + "px";
+});
+cv.addEventListener("mouseleave", () => { tipEl.style.display = "none"; if (hoverBar !== null) { hoverBar = null; draw(); } });
 /* ───────────────────────── execução ───────────────────────── */
 /** nova execução: invalida o que ainda chega da anterior */
 const send = (msg: object) => { curToken++; worker.postMessage({ ...msg, token: curToken }); };

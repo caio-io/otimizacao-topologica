@@ -190,3 +190,18 @@ Código: `test/calibracao.queiroz2.test.ts` (`CALIBRACAO2=a` ou `b`) e `test/hel
 
 ### Malha grossa e barras embutidas (correção)
 Com elemento ≥ 0,06 m na S1, o contorno inclinado do flare vira "escada" e o elemento natural de alguns trechos da armadura é vazio; o solver recusava ("trecho fora da geometria"). Agora o trecho é ligado ao elemento de concreto mais próximo (até 3 elementos, coordenadas locais presas ao elemento) e o programa avisa quantos trechos foram projetados. **O resultado em malha grossa superestima a capacidade:** S1 por apoio real — 0,04 m: 616 kN; 0,06 m: 781; 0,08 m: 831; 0,10 m: 710 (ensaio 556). A interface avisa quando o elemento passa de 0,05 m e há armadura.
+
+## Busca linear, classes de aço, dica do mouse e nó de pórtico (estado)
+**Busca linear (implementada, padrão):** quando o passo completo de correção não reduz o resíduo, o solver testa frações (1/2, 1/4, 1/8, 1/16) e fica com a melhor, sem montar a matriz nas tentativas. Medições (`work.iterations`, `work.lineSearchTrials`):
+| Caso | sem busca linear | com busca linear |
+|---|---|---|
+| S1, elemento 30 mm | 64 passos, 830 iterações, 35 s, λ = 0,6633 | **9 passos, 237 iterações, 8 s**, λ = 0,6633 |
+| S1, elemento 40 mm | 12 passos, 222 iterações | 9 passos, 203 iterações, λ = 0,616 |
+| viga-parede com tirante (T3) | 35 passos, Pu = 2086 kN, barra parou em 554 kN | 19 passos, **Pu = 2252 kN, barra em 590 kN = As·ft** (limite físico), tempo parecido |
+O T3 mudou porque, sem busca linear, o solver desistia antes de a barra chegar à ruptura. O rótulo do modo de ruptura (CC × FR) em passos que não convergem é classificado pelo estado da última iteração e pode oscilar; a carga é o dado confiável.
+
+**Aço passivo:** `STEEL_CLASSES` (CA-50 e CA-60, valores de projeto fyk/1,15; ft = 1,08·fy e εu = 5 % para o CA-50, ft = 1,05·fy e εu = 2,5 % para o CA-60 — **valores assumidos, a confirmar na NBR 7480**). `BarSpec.steelClass` ("CA50" | "CA60" | "custom"); a S1 usa "custom" (valores do ensaio). `BarSpec.extra` agrupa polilinhas iguais (estribos).
+**Interface:** cada barra tem rótulo desenhado na tela e linha na lista com classe de aço, As e fy; passar o mouse na lista destaca a barra. Dica ao passar o mouse (vista **Nível 2: fissuração**: fissurado sim/não e ε1; **Nível 2: tensões do concreto**: σ1, σ3, cisalhamento máximo τ, σx, σy, τxy; **deformação do concreto**: ε3 e % de εcu; vistas elásticas: σ1, σ2 e τ; **deformada**: ux, uy; **sobre uma barra**: identificação, aço, As, força axial, σ e % de fy).
+**Prompt de pesquisa:** `docs/prompt-pesquisa-discretizacao.md` — texto para pedir a uma IA que reúna, com fonte, página e trecho literal, os valores de discretização, fração de volume, raio do filtro, comprimento de esmagamento e demais decisões em aberto.
+
+**Nó de pórtico — NÃO FUNCIONA ainda.** `frameCornerScene()` (canto superior de um pórtico em L: pilar 0,40 m, viga 0,40 × 0,50 m, vão 3,0 m, 600 kN de referência, momento de fechamento; barra externa contínua 4Ø20 CA-50, face interna do pilar, face inferior da viga e estribos CA-60) está no código mas **fora da lista de exemplos**: com elemento de 0,05 m (3360 elementos) a análise não converge nem no primeiro passo (λ = 0, divergência após 370 s). Geometria e armadura são genéricas, sem ensaio de referência. Causas a investigar: apoio direito móvel combinado com o engaste fixo (hiperestático) e concreto sem tração fissurando de uma vez; carga de 600 kN de referência e passo inicial de 0,1 talvez já grandes demais; ausência de armadura de tração onde o concreto fissura. Primeiros passos: reduzir o passo inicial de λ, rodar com carga bem menor, simplificar para viga em balanço e só depois montar o canto.
