@@ -263,3 +263,15 @@ Nenhuma interpretação reproduz os −3 % do livro; a mais plausível (A, 10 �
 ## Hipótese testada: a "escada" do flare inclinado causa a dependência de malha? Não.
 
 S1 com o flare removido (corpo retangular 1,2 × 0,48 m + pilar 0,64 m; topo em 1,00 m, alinhado; sem contorno inclinado, portanto sem escada): **40 mm 616 kN, 20 mm 541 kN (−12 %)**, praticamente idêntico à geometria original (615 → 539 kN). O contorno inclinado não influencia o resultado nem a dependência de malha. Hipóteses já refutadas para os −12 %: geometria alinhada, flare inclinado, janela de esmagamento, placas elásticas, tension stiffening, rigidez residual, tangente × secante. Sobram: elemento (QM6 não funcionou), o modo de ruptura localizado no canto do apoio (apoio rígido com ux e uy fixos) e o próprio modelo constitutivo sem tração.
+
+## Hipótese testada: a restrição horizontal dos apoios explica a dependência de malha? Em parte.
+
+S1 (Q4, lc = 0,26 m, apoio 0,12 m) com os apoios restringidos **só na vertical** (ux livre, exceto um nó que impede o corpo rígido), contra o apoio fixo em ux e uy do livro (neoprene de 10 mm tratado como fixo, p. 137):
+
+| Malha | apoio fixo (ux, uy) | só vertical |
+|---|---|---|
+| 40 mm | 615 kN (CC) | 615 kN (FR) |
+| 30 mm | 583 kN (CC) | 615 kN (FR) |
+| 20 mm | 539 kN (CC) | 576 kN (FR) |
+
+Com ux livre o apoio deixa de ser o ponto crítico: o tirante As1 recebe o empuxo horizontal (450–459 kN, perto de ft·As = 474 kN) e a ruptura passa a ser da **barra (FR)**, não do concreto (no ensaio: CC + FY). A queda de 40 → 20 mm cai de 12 % para 6 %. Conclusão: a restrição horizontal rígida no canto do apoio contribui para a dependência de malha, mas o modelo só vertical não é fiel ao ensaio (modo de ruptura e carga acima de 556 kN). Teste de apoio intermediário (neoprene com rigidez horizontal finita) ainda não feito; o solver não tem molas de apoio.
