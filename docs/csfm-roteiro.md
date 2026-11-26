@@ -219,3 +219,17 @@ Arquivo recebido: "Catálogo Computacional de Concreto Armado" (resposta ao `doc
 **Teste:** S1 com topo em 1,00 m (em vez de 0,98) e apoios de 0,12 m (bordas em 0,08–0,20 e 1,00–1,12 m), tudo múltiplo do elemento; lc = 0,26 m; carga por apoio real. 40 mm: original 615 kN, **alinhada 610 kN**; 20 mm: original 539 kN, **alinhada 389 kN com modo "divergência" após 358 s**. Conclusão: **a hipótese das larguras não múltiplas de h não se confirmou** (a 40 mm quase não mudou) e a corrida alinhada a 20 mm **não convergiu** (λ = 0,389 é falha numérica, não capacidade). Ficam os suspeitos de placas elásticas de carga/apoio (hoje as forças e apoios são nodais) e do Q4 puro no solver não linear.
 
 **Módulo STM estilo CAST (proposta do Gemini, com mockup em HTML):** avaliação em `docs/` não é código nosso. O mockup é uma maquete de interface: TO, STS e CSFM são desenhos e fórmulas fechadas inventadas (λult, wk, σc3/fcd,ef saem de expressões ad hoc, sem solver), **não** resultados. Aproveitável: geometria de zona nodal `ws = wt·cosθ + lb·senθ`, classificação CCC/CCT/CTT, tabela de verificação face a face com taxa de utilização (SR), padrão de normas plugáveis, zona nodal estendida, inspetor de nó. Limites NBR 6118 22.3.2 (conferidos na reprodução do Borges): fcd1 = 0,85·αv2·fcd (CCC e regiões sem tração transversal), fcd2 = 0,60·αv2·fcd (tração transversal, CTT/TTT), fcd3 = 0,72·αv2·fcd (CCT), com **inclinação das bielas entre 29,7° e 63,4°** (tg entre 0,57 e 2) — o mockup usa 25° (ACI). Encaixe no roteiro: ver a resposta no chat (trilha paralela, STM manual primeiro; TO→STM por ground structure depois).
+
+## Correção do controle de passo e teste de placas elásticas (S1)
+
+- **Os 389 kN do S1 alinhado em 20 mm eram artefato.** O passo de carga, cortado de 0,1 para ~0,0002 no 1º passo (195 iterações), nunca voltava a crescer (`everFailed`) e o laço parou no teto de 2000 passos. Correção: o passo volta a crescer, o 1º passo tem 4× mais iterações e há aviso quando o teto de passos é atingido. Com isso o 20 mm alinhado dá 539 kN (CC), igual à geometria original; 40 mm alinhado dá 610 kN.
+- **1º passo (40 mm):** ~45–50 iterações com Δλ0 = 0,1, 0,01 ou 0,001 (ft = 0: o padrão de fissuras não depende da escala da carga); tangente e secante equivalentes. Rigidez residual **maior** piora (1e-3: 100 it; ≥1e-2: não converge); menor ajuda pouco (1e-5: 44 it). O solver é Newton completo (matriz remontada a cada iteração), não modificado.
+- **Placas de aço elásticas** (opção `plates`, E = 210 GPa; fileira de elementos com ≥ 2 nós carregados/apoiados vira aço linear): S1 com apoio 0,12 m, comprimento de esmagamento 0,26 m.
+
+| Malha | sem placas | com placas |
+|---|---|---|
+| 40 mm | 615 kN | 702 kN |
+| 30 mm | 583 kN | 671 kN |
+| 20 mm | 539 kN | 593 kN |
+
+  As placas elevam a capacidade (+10 a +14 %) e **não reduzem a dependência de malha** (queda 40→20 mm: 12 % sem, 16 % com). Ressalva: a espessura da placa é igual a h (uma fileira), então ela muda junto com a malha; o teste não isola a espessura. Hipótese "singularidade nodal explica a dependência": **não sustentada**. Próximos suspeitos: Q4 puro (QM6 no solver não linear), aderência perfeita e a própria lei sem tração.

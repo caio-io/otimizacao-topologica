@@ -1,5 +1,5 @@
 import type { Problem } from "./types";
-import { buildModel, solveBandedAssembled } from "./fe";
+import { buildModel, elementStiffness, solveBandedAssembled } from "./fe";
 import type { Scene } from "./scene";
 
 /**
@@ -94,6 +94,10 @@ export interface NlOptions {
   lineSearch?: boolean;
   /** usa a rigidez tangente (com piso) no lugar da secante; converge bem mais perto do patamar (padrão: sim) */
   tangent?: boolean;
+  /** rigidez residual do concreto fissurado como fração de E0 (só na matriz; padrão 1e-4) */
+  ecrRatio?: number;
+  /** placas de apoio/carga elásticas (aço): a fileira de elementos sob cada trecho carregado ou apoiado deixa de ser concreto (E na mesma unidade da tensão do concreto) */
+  plates?: { E: number; nu?: number };
   maxIt?: number;
 }
 
@@ -214,7 +218,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const origin = opt.origin ?? { x: 0, y: 0 };
   const tol = opt.tol ?? 1e-4, maxIt = opt.maxIt ?? 150;
   const check = opt.checkCrushing ?? true;
-  const E0 = (2 * c.fc) / c.eps0, Ecr = 1e-4 * E0;
+  const E0 = (2 * c.fc) / c.eps0, Ecr = (opt.ecrRatio ?? 1e-4) * E0;
   const useTan = opt.tangent ?? true;
   const Efloor = 1e-3 * E0;
 
@@ -291,7 +295,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   // janela física: n = 2R+1 elementos com n·h ≈ lc (a versão antiga usava R = round(lc/2h), isto é, n·h ≈ lc + h, e dividia pela área total)
   const crushWin = (eps: Float64Array) => opt.crushLegacy
     ? windowMax(eps, nelx, nely, Math.max(0, Math.round((opt.crushLength ?? 0) / (2 * h))))
-    : windowMaxMasked(eps, p.mask, nelx, nely, Math.max(0, Math.round(((opt.crushLength ?? 0) / h - 1) / 2)));
+    : windowMaxMasked(eps, cmask, nelx, nely, Math.max(0, Math.round(((opt.crushLength ?? 0) / h - 1) / 2)));
   const crushOf = (a: { epsEl: Float64Array; maxEpsC: number }) => (opt.crushLength ? crushWin(a.epsEl) : a.maxEpsC);
 
   // GDLs sem rigidez (só tocam vazios) viram restrições
@@ -300,6 +304,25 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   for (const be of barEls) for (const n of [be.a, be.b]) { used[2 * n] = 1; used[2 * n + 1] = 1; }
   const fixedEff = new Uint8Array(ndof);
   for (let d = 0; d < ndof; d++) fixedEff[d] = m.isFixed[d] || !used[d] ? 1 : 0;
+
+  // ---- placas elásticas: elementos com ≥ 2 nós carregados/apoiados (a fileira diretamente sob o trecho de contato)
+  const plateEl = new Uint8Array(nelx * nely);
+  let nPlates = 0;
+  const cmask = Uint8Array.from(p.mask); // máscara de concreto (placas ficam de fora da janela de esmagamento)
+  let KEplate: Float64Array | null = null;
+  if (opt.plates) {
+    const contact = new Uint8Array((nelx + 1) * (nely + 1));
+    for (const l of p.loads) contact[l.node] = 1;
+    for (const d of p.fixed) contact[d >> 1] = 1;
+    for (let e = 0; e < nelx * nely; e++) {
+      if (p.mask[e] === 0) continue;
+      const i = Math.floor(e / nely), j = e % nely;
+      const cnt = contact[i * (nely + 1) + j] + contact[i * (nely + 1) + j + 1] + contact[(i + 1) * (nely + 1) + j] + contact[(i + 1) * (nely + 1) + j + 1];
+      if (cnt >= 2) { plateEl[e] = 1; cmask[e] = 0; nPlates++; }
+    }
+    notes.push(`${nPlates} elementos de placa de aço (E = ${opt.plates.E.toExponential(1)}) sob cargas e apoios`);
+    KEplate = elementStiffness(opt.plates.nu ?? 0.3).map((v) => v * opt.plates!.E * t);
+  }
 
   const bw = 2 * nely + 5, w = bw + 1;
   const dV = (h / 2) * (h / 2) * t;
@@ -330,7 +353,11 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       const b0 = e * 8;
       for (let a = 0; a < 8; a++) ue[a] = u[edof[b0 + a]];
       Ke.fill(0); fe.fill(0);
-      for (let g = 0; g < 4; g++) {
+      if (plateEl[e]) {
+        // placa de aço linear elástica
+        for (let r = 0; r < 8; r++) { let acc = 0; for (let q = 0; q < 8; q++) acc += KEplate![r * 8 + q] * ue[q]; fe[r] = acc; }
+        if (needK) Ke.set(KEplate!);
+      } else for (let g = 0; g < 4; g++) {
         // deformações no ponto de Gauss
         let ex = 0, ey = 0, gm = 0;
         for (let a = 0; a < 4; a++) {
@@ -440,7 +467,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const rhsLam = new Float64Array(ndof), du = new Float64Array(ndof), R = new Float64Array(ndof);
   const useLS = opt.lineSearch ?? true;
   let lsTrials = 0; // total de avaliações extras de resíduo feitas pela busca linear (diagnóstico)
-  const equilibrate = (lam: number, u0: Float64Array) => {
+  const equilibrate = (lam: number, u0: Float64Array, itLimit = maxIt) => {
     let u = u0.slice();
     let nf = 0;
     for (let d = 0; d < ndof; d++) { rhsLam[d] = fixedEff[d] ? 0 : lam * fRef[d]; nf += rhsLam[d] * rhsLam[d]; }
@@ -451,7 +478,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       return Math.sqrt(n);
     };
     let asm = assemble(u), rel = Infinity, its = 0;
-    for (; its < maxIt; its++) {
+    for (; its < itLimit; its++) {
       let nr = 0;
       for (let d = 0; d < ndof; d++) { R[d] = fixedEff[d] ? 0 : rhsLam[d] - asm.fint[d]; nr += R[d] * R[d]; }
       nr = Math.sqrt(nr);
@@ -491,7 +518,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   let everFailed = false;
   for (let guard = 0; guard < 2000; guard++) {
     const lamTry = Math.min(lamGood + dl, lamMax);
-    const eq = equilibrate(lamTry, uGood);
+    // o 1º passo forma todo o padrão de fissuras (independe da escala da carga, pois ft = 0) e pede muitas iterações: dar mais folga a ele
+    const eq = equilibrate(lamTry, uGood, lamGood === 0 ? 4 * maxIt : maxIt);
     let failMode: NlMode | null = null;
     // classifica pelo estado (convergido ou última iteração): ruptura do aço, esmagamento ou divergência pura
     const epsCheck = opt.crushLength ? crushWin(eq.asm.epsEl) : eq.asm.maxEpsC;
@@ -510,7 +538,9 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     steps.push({ lambda: lamGood, its: eq.its, rel: eq.rel });
     if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice() };
     if (lamGood >= lamMax) { mode = "lambdaMax"; break; }
-    if (!everFailed && eq.its <= 6) dl *= 1.5;
+    // o passo volta a crescer mesmo depois de uma falha (antes ficava preso no menor valor e esgotava o limite de passos)
+    if (eq.its <= (everFailed ? 3 : 6)) dl = Math.min(dl * (everFailed ? 1.25 : 1.5), opt.dLambda ?? 0.1);
+    if (guard === 1999) notes.push("limite de 2000 passos atingido antes da falha: o resultado é só um limite inferior");
   }
 
   // reações nos GDLs restringidos: R = fint − λ·fRaw; equilíbrio global: ΣR + λ·ΣF = 0
