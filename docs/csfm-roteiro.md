@@ -54,3 +54,25 @@ Geometria lida da Fig. 15a (abertura em x 0,5–2,0 m, y 0,5–2,0 m; carga em x
 - **SR:** **não reproduzido** — fica ≈ 4 vezes abaixo do publicado (0,18 contra 0,72 %). A definição (eq. 7) pode usar outra base (p. ex. barras da treliça extraída) ou cargas pontuais; não resolvido. Não usar o SR desta implementação como calibração.
 - **STS** (equilíbrio da treliça extraída) não implementado.
 - Tempo: SIMP 37–91 s, BESO 51 s (14 100 elementos).
+
+## Capítulos 4, 6, 7 e Apêndice A do livro (lidos)
+**Cap. 4 — validações básicas (CSFM contra os próprios modelos teóricos).**
+- Tração uniforme (TCM/POM): curvas σsr–εm praticamente coincidentes acima da fissuração; espaçamento médio CSFM 262/233/190 mm contra TCM 260/233/189 mm (ρeff 0,88/1,28/1,91 %); sem dependência de malha. O CSFM considera a peça **já fissurada** desde o início ⇒ abertura de fissura pequena mesmo antes de fissurar (conservador para ρ baixo). Parâmetros: Es 200 GPa, fyk 500, ft 540, εuk 50 ‰, Ec 32,8 GPa, fctk 2,9, τb0 2,9, τb1 5,8 MPa, λ 0,67.
+- Compressão uniforme: qu = 9939 kN/m contra 10 000 (EC2); com malha 2× mais grossa (elemento 77 mm → 154 mm), **−10 %** por softening local nas bordas.
+- Arrancamento: Ø8 mm — 24,5 kN (ruptura do aço) contra 23,6; Ø16 mm — 78,1 kN (aderência) contra 75,4; malha padrão 25 mm; sensibilidade marginal.
+
+**Cap. 6 — 29 ensaios (cargas últimas, modos de ruptura, flechas, fissuras).** Modos: F (CC, CC+FY, FR), S (CC, CC+SY, SR); CC = |εc3| ≥ εcu2 = 3,5 ‰ sobre comprimento = espessura.
+| Grupo | Parâmetro de controle | Pu,exp/Pu,calc (média; CoV) |
+|---|---|---|
+| Vigas T TA9–TA12 (4) | largura efetiva da mesa (padrão: 350 mm; fib MC2010: 670 mm) | M0 1,12 (0,03); M1 com 670 mm 1,01 (0,08) |
+| Pilares-parede VK1/3/6 (3) | malha 5/15/25 elementos na largura | M0 0,95 (0,03); varia até 12 % com a malha |
+| Vigas com pouco estribo (17) | ≥ 10 elementos na altura; **sem** TS superestima ≈ 22 %; TCM nos estribos 0,85 | M0 (5 el.) 0,94 (0,13); M1 (10) 1,03 (0,09); M2 (20) 1,08 (0,10) |
+| Cabeças de pilar S1–S5 (5, região D) | εcu2 3,5 ‰ (M0) × 2,0 ‰ (M3) | M0 0,96 (0,13); S5 contra a segurança (866 contra 1085 kN previstos); M3 −10 % |
+- Efeitos: tension stiffening **não muda** a carga última (exceto pouca armadura transversal), mas é essencial para flechas e para o modo de ruptura (ruptura de estribo captura-se com POM, não com TCM). Malha e λ pouco influem; λ só altera aberturas calculadas pelo TCM. Lei refinada do aço melhora flechas, mas o padrão bilinear é recomendado para projeto (lado seguro). Ramo pós-pico do concreto não é modelado: a ruptura é um limite, não uma curva.
+- **Recomendação do livro:** começar com a malha padrão (ou mais grossa) e repetir com malha mais fina na verificação final para confirmar a sensibilidade.
+
+**Cap. 7 — conclusões:** campos de tensão do CSFM satisfazem equilíbrio e condições de contorno estáticas e não violam as "condições de escoamento" (teorema do limite inferior). Em região D (viga-parede com abertura), concorda com bielas e tirantes no ELU e prevê cargas um pouco maiores, além de verificar serviço.
+
+**Apêndice A (IDEA Beam/RCS, 1D):** ELU sem tração do concreto, εcu2 (parábola-retângulo) ou εcu3 (bilinear); ELS: ζ = 1 − β(σsr/σs)², β = 1,0 (curto prazo) e 0,5 (longo prazo); EI = EIcr·ζ + EIun·(1 − ζ); Ec,eff = Ecm/(1+φ).
+
+**Ainda não encontrado:** a expressão analítica de kc2(ε1) (só aparece como curva na Fig. 3.1e e como generalização da fib MC2010); precisa da fib MC2010 ou da página Theoretical Background da IDEA.
