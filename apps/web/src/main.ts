@@ -443,7 +443,7 @@ function changed(clearResults = true) {
   if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
   $("msg").innerHTML = "";
   localStorage.setItem("stm-scene", JSON.stringify(scene));
-  renderList(); updateMeshInfo(); renderNormas(); draw();
+  renderList(); updateMeshInfo(); renderNormas(); if ($<HTMLInputElement>("nlCrushAuto").checked) { syncCrushField(); if (scene.nl) scene.nl.crushLength = scene.t; } if ($<HTMLInputElement>("rminAuto").checked) applyBielaFilter(false); draw();
 }
 const evPos = (ev: MouseEvent): [number, number] => { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
 
@@ -894,12 +894,21 @@ function renderBars() {
 function syncNl() {
   const nl = scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
   $<HTMLSelectElement>("nlValues").value = nl.values; $<HTMLSelectElement>("nlCode").value = nl.code ?? "NBR6118"; $<HTMLInputElement>("nlEpsCu").value = String(Math.round(nl.epsCu * 10000) / 10);
-  $<HTMLInputElement>("nlCrush").value = String(nl.crushLength);
+  $<HTMLInputElement>("nlCrushAuto").checked = nl.crushAuto !== false;
+  syncCrushField();
   renderBars();
   $("presetNote").textContent = presetSel.value.includes("S1") ? "Ensaio: 556 kN por apoio real (P/4 → 2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm: rápido (≈ 10 s); 20 mm: ≈ 4 min." : "";
 }
-const readNl = () => { scene.nl = { code: $<HTMLSelectElement>("nlCode").value as NonNullable<NlParamsT["code"]>, values: $<HTMLSelectElement>("nlValues").value as "mean" | "design", epsCu: Math.max(0.001, +$<HTMLInputElement>("nlEpsCu").value / 1000), crushLength: Math.max(0, +$<HTMLInputElement>("nlCrush").value) }; };
+const readNl = () => { scene.nl = { code: $<HTMLSelectElement>("nlCode").value as NonNullable<NlParamsT["code"]>, values: $<HTMLSelectElement>("nlValues").value as "mean" | "design", epsCu: Math.max(0.001, +$<HTMLInputElement>("nlEpsCu").value / 1000), crushLength: $<HTMLInputElement>("nlCrushAuto").checked ? scene.t : Math.max(0, +$<HTMLInputElement>("nlCrush").value), crushAuto: $<HTMLInputElement>("nlCrushAuto").checked }; };
 for (const id of ["nlValues", "nlEpsCu", "nlCrush"]) $(id).onchange = () => { readNl(); changed(); };
+$("nlCrushAuto").addEventListener("change", () => { syncCrushField(); readNl(); changed(); });
+/** com o automático ligado o campo mostra a espessura e fica travado */
+function syncCrushField() {
+  const auto = $<HTMLInputElement>("nlCrushAuto").checked, f = $<HTMLInputElement>("nlCrush");
+  if (auto) f.value = String(scene.t);
+  else if (scene.nl) f.value = String(scene.nl.crushLength);
+  f.disabled = auto;
+}
 // trocar a norma atualiza o εcu do perfil (editável em seguida)
 $("nlCode").onchange = () => { $<HTMLInputElement>("nlEpsCu").value = String(Math.round(codeById($<HTMLSelectElement>("nlCode").value).epsCu * 10000) / 10); readNl(); changed(); };
 $("nl").onclick = () => {
@@ -1054,7 +1063,7 @@ $<HTMLInputElement>("fck").onchange = (e) => {
 };
 $<HTMLInputElement>("thick").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { scene.t = v; changed(); } };
 /** largura mínima da biela (Borges 2022) → raio do filtro */
-$("biela").onclick = () => {
+function applyBielaFilter(manual: boolean) {
   const fck = clampFck(scene.fck ?? 30), m = frames[+slider.value];
   let F: number, origem: string;
   if (m && m.reactions.length) { F = Math.max(...m.reactions.map((r) => Math.hypot(r.rx, r.ry))); origem = "maior reação de apoio"; }
@@ -1062,12 +1071,14 @@ $("biela").onclick = () => {
     const tot = scene.loads.reduce((a, l) => a + Math.hypot(l.fx, l.fy), 0);
     F = tot / Math.max(1, scene.supports.length); origem = "carga total ÷ nº de apoios (estimativa; rode o campo elástico para usar a reação)";
   }
-  if (!(F > 0)) { toast("Adicione ao menos uma força."); return; }
+  if (!(F > 0)) { if (manual) toast("Adicione ao menos uma força."); return; }
   const code = activeCode(), sd = strutDesignStrength(code, fck), sig = sd.sigma, a = Math.abs(F) / (scene.t * sig * 1000);
   const r = Math.min(12, Math.max(1.5, Math.ceil(filterRadiusForWidth(a, scene.h) * 2) / 2));
   $<HTMLInputElement>("rmin").value = String(r); $("rv").textContent = String(r);
   $("bielaInfo").textContent = `Norma: ${code.short}${sd.verified === true ? "" : sd.verified === "sec" ? " (fonte secundária)" : " (PROVISÓRIO)"}${sd.fallback ? " — sem fator de biela conferido, usando a fórmula da NBR" : ""} · F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa [${sd.formula}] · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
-};
+}
+$("biela").onclick = () => applyBielaFilter(true);
+$("rminAuto").addEventListener("change", () => { $<HTMLInputElement>("rmin").disabled = $<HTMLInputElement>("rminAuto").checked; if ($<HTMLInputElement>("rminAuto").checked) applyBielaFilter(false); });
 
 const presetSel = $<HTMLSelectElement>("preset");
 for (const k of Object.keys(ALL_PRESETS)) presetSel.add(new Option(k, k));
@@ -1279,6 +1290,10 @@ function renderNormas() {
   el.querySelectorAll<HTMLButtonElement>("button[data-code]").forEach((b) => { b.onclick = () => { const s2 = $<HTMLSelectElement>("nlCode"); s2.value = b.dataset.code!; s2.dispatchEvent(new Event("change")); }; });
 }
 // trocar a norma atualiza aço, barras e a tabela comparativa
-$("nlCode").addEventListener("change", () => { fillRebarSteel(); renderBars(); renderNormas(); });
+$("nlCode").addEventListener("change", () => { fillRebarSteel(); renderBars(); renderNormas(); if ($<HTMLInputElement>("rminAuto").checked) applyBielaFilter(false); });
 fillRebarSteel();
 renderNormas();
+
+// estado inicial dos parâmetros automáticos
+$<HTMLInputElement>("rmin").disabled = $<HTMLInputElement>("rminAuto").checked;
+if ($<HTMLInputElement>("rminAuto").checked) applyBielaFilter(false);

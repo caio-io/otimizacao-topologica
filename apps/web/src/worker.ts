@@ -44,7 +44,9 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
     for (let e = 0; e < nel; e++) rho[e] = problem.mask[e] ? 1 : 0;
     const zeros = new Float64Array(nel);
     const field = { s1: zeros, s2: zeros, theta: zeros };
-    const par = d.scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
+    const par0 = d.scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
+    // comprimento de esmagamento: automático = espessura da peça (livro do CSFM, p. 18/104/137)
+    const par = { ...par0, crushLength: par0.crushAuto !== false ? d.scene.t : par0.crushLength };
     const concrete = concreteFromScene(d.scene);
     let P0x = 0, P0y = 0;
     for (let n = 0; n < model.fRaw.length; n += 2) { P0x += model.fRaw[n]; P0y += model.fRaw[n + 1]; }

@@ -71,6 +71,11 @@ O resultado **não substitui o projeto de um engenheiro responsável** (aviso fi
 - **Malha e material:** tamanho do elemento (`#elemSize`, m; limite de 20 000 elementos), espessura *t* (`#thick`), fck (`#fck`, mín. 25 MPa), largura da placa de aplicação das forças (`#bearing`, igual para todas).
 - **Apoios e cargas:** lista dos itens da cena (`#list`: material, apoios, forças), propriedades do item selecionado (`#props`), tipo de apoio ao desenhar (`#supKind`: fixo, móvel em x, móvel em y).
 
+### 3.2b Parâmetros automáticos (derivados da geometria e da norma)
+- **Comprimento de esmagamento = espessura t** por padrão (livro do CSFM, p. 18, 104 e 137); caixa "Automático" na aba Nível 2 trava o campo; desmarcada, o valor é livre (avançado).
+- **Raio do filtro automático**: calculado pela largura mínima da biela da norma ativa (a = F/(t·σRd,máx); NBR pela fórmula de Borges, EC2/MC2010 pelo fator da Tab. 2.1 × fcd) e recalculado ao mudar modelo, malha, fck, espessura ou norma; caixa "Automático" na aba Otimização trava o controle.
+- **Fração de volume**: continua livre (não há critério validado); a tela cita os valores usados na literatura (40 %, 30–40 %, 20–80 %). Uma varredura volume × flexibilidade (joelho da curva) seria o critério objetivo e ainda não existe.
+
 ### 3.3 Aba *Otimização*
 - **Otimização topológica:** método (`#method`: BESO ou SIMP), fração de volume (`#vf`, 0,15–0,70), raio do filtro em elementos (`#rmin`, 1,5–12), *Ajustar filtro pela largura da biela* (`#biela`, texto em `#bielaInfo`), *Otimizar* (`#run`, vira *Parar* durante a execução), *Campo elástico* (`#elastic`).
 - **CSFM linear:** *CSFM — armadura sugerida* (`#csfm`), resultado em `#csfmOut`.

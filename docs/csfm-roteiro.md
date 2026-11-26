@@ -343,3 +343,9 @@ Fontes disponíveis para nós: **fib Model Code 2010** (Boletim 65, versão fina
 **ACI 318:** conferidos só εcu = 3,0 ‰, φ = 0,75 e o ângulo mínimo de 25° entre bielas e tirantes (livro, p. 14). Fontes secundárias citam βs = 1,0/0,75 e βn = 0,80 (CCT)/0,60 (CTT), sem conferência primária: não implementados.
 
 **NBR 6118:** inalterada (γc = 1,4, αcc = 0,85, γs = 1,15, εc2 = 2 ‰, εcu = 3,5 ‰, εud = 10 ‰, biela de Borges). Pendentes: fatores fcd1/fcd2/fcd3 (ordem de fcd2 e fcd3 a conferir) e as propriedades das classes de aço (NBR 7480).
+
+## Parâmetros travados ou derivados (nov/2026)
+
+- **Comprimento de esmagamento:** o livro do CSFM usa "comprimento igual à espessura da região" em todo o Capítulo 6 (p. 18, 104, 137; S1: 2·lb = 0,26 m). Agora é **automático = espessura t** (`NlParams.crushAuto`, padrão ligado), editável só desmarcando a caixa.
+- **Raio do filtro:** automático pela largura mínima da biela da norma ativa (Borges, 2022, para a NBR; fator da Tab. 2.1 do livro × fcd para EC2 e MC2010; ACI cai na fórmula da NBR com aviso). Verificado: viga-parede, t = 0,2 m → 6,5 elementos (BESO converge a 35 % em 62 iterações); t = 0,4 m → 3,5; EC2 → 2,5.
+- **Fração de volume:** sem critério validado nas fontes; fica livre, com os valores da literatura do projeto (Xia 40 %, Queiroz e Leonel 30 e 40 %, IDEA 20–80 %). Critério objetivo possível: varredura volume × flexibilidade e escolha do joelho da curva (não implementado).

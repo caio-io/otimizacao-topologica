@@ -66,6 +66,8 @@ export interface NlParams {
   epsCu: number;
   /** comprimento de esmagamento [m]: critério sobre a deformação MÉDIA nessa janela; 0 = valor pontual */
   crushLength: number;
+  /** true (padrão): o comprimento de esmagamento é a espessura t da peça (livro do CSFM, p. 18, 104 e 137); false usa `crushLength` */
+  crushAuto?: boolean;
   /** norma (perfil de parâmetros de projeto, ver `codes.ts`); padrão NBR 6118 */
   code?: "NBR6118" | "EC2" | "MC2010" | "ACI318";
 }
