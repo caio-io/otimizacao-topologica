@@ -141,7 +141,7 @@ export function buildModel(p: Problem): FEModel {
   }
   const fRaw = f.slice();
   for (let d = 0; d < ndof; d++) if (isFixed[d]) f[d] = 0;
-  return { ndof, nel, edof, KE: elementStiffness(p.nu), isFixed, f, fRaw };
+  return { ndof, nel, edof, KE: elementStiffness(p.nu, p.element ?? "qm6"), isFixed, f, fRaw };
 }
 
 /**

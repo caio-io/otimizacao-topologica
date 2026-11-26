@@ -313,3 +313,16 @@ Reexecutado com o controle de passo corrigido (exemplo `frameCornerScene`, 600 k
 ## Nó de pórtico: resolvido com o apoio travado em x
 
 Variantes (100 mm, tolerância do 1º passo ×10): original (Ap2 só uy) **diverge a 60 kN**; **Ap2 em ux e uy converge: 1089 kN, 20 passos, modo CC, barra externa 550 kN (escoou), pilar 358 kN, viga 184 kN**; sem Ap2 (balanço) não converge (0 passos). Com Ap2 duplo: 100 mm → 1089 kN (20 passos); 50 mm → 850 kN (17 passos, 46 s; barra externa 448 kN sem escoar). Fator de tolerância do 1º passo (1 ou 10) não altera o resultado. O exemplo (`frameCornerScene`, ilustrativo, sem ensaio) está na lista de modelos e tem teste automático (100 mm). A causa da divergência com o apoio livre em x não foi investigada (hipótese: falta de estabilidade horizontal do conjunto).
+
+## Otimização topológica: Q4 × QM6 (BESO e SIMP, fração de volume 0,35, raio do filtro 2,5)
+
+O ramo CSFM não alterou `beso.ts`, `simp.ts` nem `stress.ts`; mudou só o elemento padrão do MEF linear (Q4 → QM6, em `fe.ts`). Nova opção `Problem.element: "q4" | "qm6"` permite reproduzir os resultados antigos. Comparação nos exemplos de viga-parede:
+
+| Exemplo | Método | Elementos que diferem (Q4 × QM6) | Flexibilidade (medida em QM6) Q4 / QM6 |
+|---|---|---|---|
+| sem abertura | BESO | 4,5 % | 9,798e6 / 9,791e6 |
+| sem abertura | SIMP | 0,1 % | 1,002e7 / 1,003e7 |
+| com abertura | BESO | 9,1 % | 1,225e7 / 1,213e7 |
+| com abertura | SIMP | 0,2 % | 1,239e7 / 1,239e7 |
+
+SIMP praticamente não muda; BESO muda a topologia em 5–9 % dos elementos com diferença de flexibilidade ≤ 1 % (problema não convexo, variação dentro do esperado). Conclusão: a troca de elemento não alterou a otimização de forma relevante.

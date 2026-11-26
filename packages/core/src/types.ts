@@ -21,6 +21,8 @@ export interface Problem {
   fixed: number[];
   /** cargas nodais [kN] */
   loads: { node: number; fx: number; fy: number }[];
+  /** elemento do MEF linear: "qm6" (padrão, Q4 com modos incompatíveis) ou "q4" (puro; reproduz os resultados anteriores ao ramo CSFM) */
+  element?: "q4" | "qm6";
 }
 
 export interface SimpOptions {
