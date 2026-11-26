@@ -36,7 +36,7 @@
 | 🌊 **Campo de tensões** | Trajetórias de tração e compressão, mapas σ1/σ2, deformada. |
 | 🔩 **CSFM linear** | Zonas tracionadas e armadura sugerida `As = T/fyd` a partir do campo elástico, sem otimização. |
 | 📐 **Largura de biela** | Largura mínima pela NBR 6118 (Borges, 2022) para sugerir o raio do filtro. |
-| 🧪 **Análise não linear (Nível 2)** | Concreto sem tração + barras de aço com **aderência perfeita**, fissuras girantes, controle de carga com bissecção até o esmagamento ou a ruptura da barra. Base do futuro CSFM completo. |
+| 🧪 **Análise não linear (Nível 2)** | **Já no editor:** concreto sem tração + barras de aço com **aderência perfeita** (fissuras girantes). Carga última, modo de ruptura, força nas barras, mapas de deformação do concreto e de fissuração, evolução passo a passo. Exemplo pronto: **cabeça de pilar S1** (pilar + travessa, do livro do CSFM). Base do futuro CSFM completo. |
 
 ## 🚀 Início rápido
 
@@ -101,6 +101,17 @@ Cada etapa é conferida contra a literatura. Os números completos, com limites 
 </details>
 
 <details>
+<summary><b>Análise não linear (Nível 2) — cabeça de pilar S1</b></summary>
+
+1. Em *Exemplo*, escolha **Cabeça de pilar S1 (CSFM, livro) — análise não linear**: um pilar de 0,64 m que se abre num flare até a travessa de 1,20 m, apoiada em dois pontos (cada um é dois apoios reais no ensaio), com a armadura principal em U e seis camadas horizontais desenhadas em vermelho.
+2. Em *Análise não linear (Nível 2)* confira as resistências (**médias** para comparar com ensaio, **de projeto** para NBR 6118), o **εcu** e o **comprimento de esmagamento**; a lista *Armadura* permite alterar a área e o fy de cada barra.
+3. Clique em **Rodar análise não linear**. A carga cresce em passos e a tela mostra a evolução; **Parar** interrompe.
+4. Veja os resultados: carga aplicada (λ × 4000 kN de referência), modo de ruptura, tabela de barras (força máxima, deformação, se escoou), reações. Em *Visualização*: **Nível 2: deformação do concreto** (as bielas aparecem em vermelho) e **Nível 2: fissuração e armadura** (azul = fissurado; barras verde → vermelho = 0 → 100 % de fy).
+
+Referência do exemplo: ensaio de **556 kN por apoio real** (2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm leva ≈ 10 s; 20 mm, ≈ 4 min. **Não é a verificação CSFM completa** (sem kc2, sem tension stiffening, sem ELS) e a armadura do exemplo foi lida de figuras. Ainda não dá para desenhar barras na tela: elas vêm do exemplo.
+</details>
+
+<details>
 <summary><b>Editando geometria, apoios e forças</b></summary>
 
 | Ação | Como |
@@ -137,7 +148,7 @@ packages/core        @stm/core — cálculo em TypeScript puro
   src/simp.ts          SIMP + filtro de sensibilidade + OC
   src/scene.ts         cena editável → malha (formas, aberturas, apoios, forças)
   src/csfm.ts          zonas tracionadas e armadura sugerida (linear)
-  src/nonlinear.ts     Nível 2: concreto sem tração + barras (aderência perfeita)
+  src/nonlinear.ts     Nível 2: concreto sem tração + barras (aderência perfeita), em passos de carga
   src/indices.ts       índices TRS/SR (Xia et al.) e volume de aço
   test/                testes e calibrações (as lentas ficam desligadas por padrão)
 apps/web             interface (Vite + Web Worker, Canvas 2D)
@@ -168,7 +179,8 @@ $env:GERAR_IMG=1;   npx vitest run test/imagens.test.ts             # regenera a
 - [ ] **Nível 3:** amolecimento por tração transversal (kc2), aderência/ancoragem
 - [ ] **Nível 4:** tension stiffening e abertura de fissura (ELS)
 - [ ] Extração do modelo de bielas e tirantes por *ground structure* (Brito, 2026)
-- [ ] Interface do Nível 2 no editor (armadura, resultados não lineares)
+- [x] Interface do Nível 2 no editor: exemplo S1, painel de resultados, vistas de deformação e fissuração
+- [ ] Desenhar e editar barras de armadura na tela (hoje só a área e o fy, a partir dos exemplos)
 
 ## 📚 Documentação
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { base, buildProblem, ca50, nbrConcrete, plateLoad, solveNonlinear } from "../src";
+import { base, barsFromScene, buildProblem, ca50, concreteFromScene, nbrConcrete, pierCapScene, plateLoad, solveNonlinear, solveNonlinearSteps } from "../src";
 import type { Problem } from "../src";
 
 /** bloco manual: todos os elementos de concreto */
@@ -77,6 +77,35 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     console.log(`T2d (b): λu=${r2.lambda.toFixed(1)} kN  fc·A=${(c.fc * A).toFixed(1)} kN  modo=${r2.mode}  N barra=${r2.bars[0].axialMax.toFixed(1)} kN`);
     expect(r2.lambda).toBeGreaterThan(0.99 * c.fc * A);
     expect(r2.bars[0].axialMax).toBeGreaterThan(100);
+  });
+
+
+  it("passo a passo: o gerador emite o progresso e termina no mesmo resultado; amostras das barras e mapas existem", () => {
+    const nelx = 10, nely = 2, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * (0 * (nely + 1) + j), 2 * (0 * (nely + 1) + j) + 1);
+    p.loads.push({ node: nelx * (nely + 1) + 1, fx: 1, fy: 0 });
+    const opt = { concrete: nbrConcrete(30), bars: [{ x0: 0, y0: 0.05, x1: 0.5, y1: 0.05, area: 1e-3, steel: ca50, label: "tirante" }], dLambda: 50, stepwise: true };
+    const g = solveNonlinearSteps(p, opt);
+    let n = 0, lastLambda = 0, r = g.next();
+    while (!r.done) { n++; lastLambda = r.value.lambda; expect(r.value.barSamples[0].length).toBe(10); r = g.next(); }
+    expect(n).toBeGreaterThan(3);
+    expect(r.value.lambda).toBeCloseTo(lastLambda, 9);
+    expect(r.value.barSamples[0][0].y).toBeCloseTo(0.05, 9);
+    expect(r.value.epsComp.length).toBe(nelx * nely);
+    expect(r.value.epsTens.length).toBe(nelx * nely);
+  });
+
+  it("S1 no núcleo: a cena traz a armadura e os parâmetros; as conversões para o solver respeitam as unidades", () => {
+    const sc = pierCapScene();
+    expect(sc.bars?.length).toBe(7);
+    const bars = barsFromScene(sc);
+    expect(bars[0].area).toBeCloseTo(9 * Math.PI * 0.005 ** 2, 12);
+    expect(bars[0].steel.fy).toBeCloseTo(620e3, 6);
+    expect(bars[0].steel.Es).toBeCloseTo(200e6, 3);
+    expect(concreteFromScene(sc).fc).toBeCloseTo(31.2e3, 6); // valores médios: sem γ
+    expect(concreteFromScene({ ...sc, nl: { values: "design", epsCu: 0.0035, crushLength: 0 } }).fc).toBeCloseTo((0.85 * 31.2e3) / 1.4, 6);
+    expect(buildProblem(sc).errors).toEqual([]);
   });
 
   it("T3 viga-parede com tirante: tirante escoa, equilíbrio de seção consistente (braço de alavanca cabe na altura) e capacidade ≥ MBT", () => {

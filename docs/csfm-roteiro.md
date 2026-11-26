@@ -180,3 +180,10 @@ Código: `test/calibracao.queiroz2.test.ts` (`CALIBRACAO2=a` ou `b`) e `test/hel
 - **Média sobre o comprimento = espessura (0,26 m, a recomendação do livro) dá 550–608 kN**, no intervalo do ensaio (556) e do CSFM (568–629), mas **cai ≈ 10 % ao refinar de 40 para 20 mm** (o livro relata ≈ 3 % entre as suas malhas). O resultado ainda depende da malha e do comprimento de esmagamento.
 - O aço principal **não chega a escoar** no nosso modelo (373 kN contra 438 kN de escoamento na melhor corrida); no ensaio o modo foi CC + FY.
 - **Limites:** sem kc2 nem tension stiffening; geometria e posição das barras lidas de figuras; placa de carga de 0,48 m e espessura 2·lb assumidas; só S1 (S2–S5 não rodadas); malha de 10 mm só com o critério pontual (45 min).
+
+## Nível 2 no editor (interface)
+- `Scene` ganhou `bars?: BarSpec[]` (poligonal, As em cm², fy/ft em MPa, Es em GPa, εu) e `nl?: NlParams` (valores médios × de projeto, εcu, comprimento de esmagamento); `loadSaved` valida e descarta o que vier malformado.
+- `pierCapScene()` em `src/presets.ts` (S1 do livro) vira o exemplo **"Cabeça de pilar S1 (CSFM, livro) — análise não linear"** (malha de 40 mm, ≈ 10 s). `barsFromScene`/`concreteFromScene` convertem as unidades para o solver.
+- `solveNonlinearSteps` é um gerador (`stepwise: true` emite λ, deslocamentos, mapas de deformação e forças nas barras a cada passo); o worker (`mode: "nl"`) o executa em fatias, permite parar e envia quadros ao editor; `solveNonlinear` continua síncrono.
+- Painel: resistências, εcu, comprimento de esmagamento, lista de barras (As e fy editáveis), botão rodar/parar, resultado (carga, modo, barras, reações) e as vistas *Deformação do concreto* e *Fissuração e armadura*. As barras aparecem desenhadas em qualquer exemplo que as tenha.
+- **Verificado no navegador:** S1 a 40 mm → P = 2466 kN (616 kN por apoio real), modo CC, As1 a 420 kN (não escoou), camadas Ah escoadas; as duas bielas aparecem no mapa de compressão. **Não está pronto:** desenhar barras na tela, outros exemplos com armadura, escolha de unidades.

@@ -1,9 +1,11 @@
-import { BESO_DEFAULTS, beso, buildModel, buildProblem, principalStresses, simp, solveDisplacements, supportReactions } from "@stm/core";
+import { BESO_DEFAULTS, barsFromScene, beso, buildModel, buildProblem, concreteFromScene, principalStresses, simp, solveDisplacements, solveNonlinearSteps, supportReactions } from "@stm/core";
+import type { NlStep } from "@stm/core";
 import type { Scene } from "@stm/core";
 
 export type WorkerIn =
   | { token: number; mode: "opt"; scene: Scene; method: "beso" | "simp"; volfrac: number; rmin: number }
   | { token: number; mode: "elastic"; scene: Scene }
+  | { token: number; mode: "nl"; scene: Scene }
   | { stop: true };
 
 let stopFlag = false;
@@ -32,6 +34,57 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
     post({ kind: "frame", token, dims, mask: problem.mask, iter: 0, compliance: 0, volume: 1, change: 0, rho, u,
       field: principalStresses(problem, u), done: true, warnings: r.warnings, elastic: true,
       reactions: rr.reactions, residual: rr.residual });
+    return;
+  }
+
+
+  if (d.mode === "nl") {
+    const nel = problem.mask.length;
+    const rho = new Float64Array(nel);
+    for (let e = 0; e < nel; e++) rho[e] = problem.mask[e] ? 1 : 0;
+    const zeros = new Float64Array(nel);
+    const field = { s1: zeros, s2: zeros, theta: zeros };
+    const par = d.scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
+    const concrete = concreteFromScene(d.scene);
+    let P0x = 0, P0y = 0;
+    for (let n = 0; n < model.fRaw.length; n += 2) { P0x += model.fRaw[n]; P0y += model.fRaw[n + 1]; }
+    const P0 = Math.hypot(P0x, P0y);
+    let gen: ReturnType<typeof solveNonlinearSteps>;
+    try {
+      gen = solveNonlinearSteps(problem, { concrete, bars: barsFromScene(d.scene), origin: r.origin, checkCrushing: true, crushLength: par.crushLength || undefined, dLambda: 0.1, maxIt: 200, stepwise: true });
+    } catch (err) { post({ kind: "error", token, errors: [String((err as Error).message ?? err)], warnings: r.warnings }); return; }
+    const groupReactions = (reaction: Float64Array) => r.supportGroups.map((g) => ({
+      id: g.id, x: g.x, y: g.y,
+      rx: g.nodes.reduce((a, n) => a + reaction[2 * n], 0), ry: g.nodes.reduce((a, n) => a + reaction[2 * n + 1], 0),
+    }));
+    const base = { kind: "frame", token, dims, mask: problem.mask, compliance: 0, volume: 1, change: 0, rho, field, P0 };
+    let first = true, count = 0, last: NlStep | null = null;
+    const step = () => {
+      if (token !== runToken) return;
+      try {
+        if (stopFlag) {
+          post({ ...base, iter: count, u: last?.u ?? new Float64Array(model.ndof), reactions: [], residual: { x: 0, y: 0 }, done: true, warnings: [],
+            nl: { lambda: last?.lambda ?? 0, mode: "interrompida", epsComp: last?.epsComp ?? zeros, epsTens: last?.epsTens ?? zeros, barSamples: last?.barSamples ?? [], bars: [],
+              maxEpsC: last?.maxEpsC ?? 0, crushStrain: last?.crushStrain ?? 0, epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: { x: 0, y: 0 } } });
+          return;
+        }
+        const g = gen.next();
+        if (!g.done) {
+          const st = g.value; last = st; count++;
+          post({ ...base, iter: count, u: st.u, reactions: [], residual: { x: 0, y: 0 }, done: false, warnings: first ? r.warnings : [],
+            nl: { lambda: st.lambda, mode: null, epsComp: st.epsComp, epsTens: st.epsTens, barSamples: st.barSamples, bars: [], maxEpsC: st.maxEpsC, crushStrain: st.crushStrain,
+              epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: { x: 0, y: 0 } } });
+          first = false;
+          setTimeout(step, 0);
+        } else {
+          const res = g.value;
+          post({ ...base, iter: count + 1, u: res.u, reactions: groupReactions(res.reaction), residual: res.equilibrium, done: true, warnings: first ? r.warnings : [],
+            nl: { lambda: res.lambda, mode: res.mode, epsComp: res.epsComp, epsTens: res.epsTens, barSamples: res.barSamples, bars: res.bars, maxEpsC: res.maxCompStrain, crushStrain: res.crushStrain,
+              epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: res.equilibrium } });
+        }
+      } catch (err) { post({ kind: "error", token, errors: [String((err as Error).message ?? err)], warnings: [] }); }
+    };
+    step();
     return;
   }
 

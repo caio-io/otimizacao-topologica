@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
-import type { LoadSpec, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
+import type { LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const cv = $<HTMLCanvasElement>("cv");
@@ -22,6 +22,9 @@ function loadSaved(): Scene | null {
     if (!Array.isArray(o.shapes) || !o.shapes.every((q: any) => typeof q.id === "string" && (q.mode === "add" || q.mode === "cut") && Array.isArray(q.pts) && q.pts.every(okPt))) return null;
     if (!Array.isArray(o.loads) || !o.loads.every((l: any) => typeof l.id === "string" && [l.x, l.y, l.fx, l.fy].every(num))) return null;
     if (!Array.isArray(o.supports) || !o.supports.every((s: any) => typeof s.id === "string" && [s.x0, s.y0, s.x1, s.y1].every(num) && typeof s.ux === "boolean" && typeof s.uy === "boolean")) return null;
+    const okBar = (b: any) => b && typeof b.id === "string" && typeof b.label === "string" && Array.isArray(b.path) && b.path.every(okPt) && [b.areaCm2, b.fy, b.ft, b.Es, b.epsU].every(num);
+    if (o.bars !== undefined && !(Array.isArray(o.bars) && o.bars.every(okBar))) delete o.bars;
+    if (o.nl !== undefined && !(o.nl && (o.nl.values === "mean" || o.nl.values === "design") && num(o.nl.epsCu) && num(o.nl.crushLength))) delete o.nl;
     return o as Scene;
   } catch { return null; }
 }
@@ -45,11 +48,19 @@ interface Msg {
   mask: Uint8Array; iter: number; compliance: number; volume: number; change: number;
   rho: Float64Array; u: Float64Array; field: PrincipalField; done: boolean; warnings: string[]; elastic?: boolean;
   reactions: Reaction[]; residual: { x: number; y: number };
+  /** carga de referência total [kN] (módulo da soma das forças) e resultado da análise não linear */
+  P0?: number; nl?: NlInfo;
+}
+interface NlInfo {
+  lambda: number; mode: "CC" | "FR" | "divergencia" | "lambdaMax" | "interrompida" | null;
+  epsComp: Float64Array; epsTens: Float64Array; barSamples: { x: number; y: number; N: number }[][]; bars: NlBarResult[];
+  maxEpsC: number; crushStrain: number; epsCu: number; fc: number; crushLength: number; equilibrium: { x: number; y: number };
 }
 const frames: Msg[] = [];
 type CsfmData = ReturnType<typeof tensionZones>;
 const csfmData = new WeakMap<Msg, CsfmData>();
 let pendingCsfm = false;
+const NL_LABEL = "Rodar análise não linear";
 const slider = $<HTMLInputElement>("frame");
 
 const view = { s: 100, ox: 0, oy: 0 };
@@ -111,6 +122,27 @@ function drawGeometry() {
   }
 }
 
+/** armadura da cena; com resultado não linear, cada trecho é colorido por σ/fy (tração: verde→vermelho; compressão: azul) */
+function drawBars(m?: Msg) {
+  const bars = scene.bars ?? [];
+  if (!bars.length) return;
+  ctx.save(); ctx.lineCap = "round"; ctx.lineJoin = "round";
+  bars.forEach((b, k) => {
+    ctx.beginPath(); b.path.forEach(([x, y], i) => (i ? ctx.lineTo(wx(x), wy(y)) : ctx.moveTo(wx(x), wy(y))));
+    ctx.strokeStyle = m?.nl ? "rgba(40,40,40,.55)" : "#8a2a1d"; ctx.lineWidth = m?.nl ? 1 : Math.max(1.5, Math.min(4, Math.sqrt(b.areaCm2)));
+    ctx.stroke();
+    const samples = m?.nl?.barSamples[k];
+    if (!samples) return;
+    const Afy = b.areaCm2 * 1e-4 * b.fy * 1e3;
+    for (const sp of samples) {
+      const r = sp.N / Afy, a = Math.min(1, Math.abs(r));
+      ctx.fillStyle = r >= 0 ? `hsl(${Math.round(120 - 120 * a)},80%,42%)` : `hsl(215,${Math.round(30 + 50 * a)}%,${Math.round(65 - 25 * a)}%)`;
+      ctx.beginPath(); ctx.arc(wx(sp.x), wy(sp.y), Math.max(1.8, Math.min(3.4, Math.sqrt(b.areaCm2))), 0, 7); ctx.fill();
+    }
+  });
+  ctx.restore();
+}
+
 const solidAt = (m: Msg, e: number) => m.mask[e] !== 0 && m.rho[e] > 0.5;
 
 function drawResult(m: Msg, mode: string, showMesh: boolean) {
@@ -119,6 +151,26 @@ function drawResult(m: Msg, mode: string, showMesh: boolean) {
   const X = (i: number) => wx(ox + i * h), Y = (j: number) => wy(top - j * h);
   const solidIdx: number[] = [];
   for (let e = 0; e < m.mask.length; e++) if (solidAt(m, e)) solidIdx.push(e);
+
+  if (mode === "nlconc" || mode === "nlcrack") {
+    const nl = m.nl;
+    for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+      const e = i * nely + j;
+      if (m.mask[e] === 0) continue;
+      let col = "#e9edf2";
+      if (nl && mode === "nlconc") {
+        const r = Math.min(1.2, nl.epsComp[e] / nl.epsCu);
+        col = r < 0.02 ? "#e9edf2" : r >= 1 ? "#7b1e12" : `rgb(255,${Math.round(238 - 205 * r)},${Math.round(232 - 215 * r)})`;
+      } else if (nl && mode === "nlcrack") {
+        col = nl.epsTens[e] > 2e-5 ? "#bcd6f2" : "#e9edf2";
+      }
+      ctx.fillStyle = col; ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
+      if (showMesh) { ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.lineWidth = 0.5; ctx.strokeRect(X(i), Y(j), px, px); }
+    }
+    ctx.fillStyle = "#1c2430"; ctx.font = "12px system-ui";
+    ctx.fillText(nl ? (mode === "nlconc" ? `Deformação de compressão média / εcu (${(nl.epsCu * 1000).toFixed(1)} ‰): cinza → vermelho; marrom = esmagado` : "Azul: concreto fissurado (tração principal > 0) · barras: verde → vermelho = 0 → 100 % de fy; azul = compressão") : "Rode a análise não linear.", 14, cv.height - 30);
+    return;
+  }
 
   if (mode === "csfm") {
     const cz = csfmData.get(m);
@@ -303,6 +355,7 @@ function draw() {
     drawResult(frame, $<HTMLSelectElement>("view").value, $<HTMLInputElement>("showMesh").checked);
     for (const s of scene.shapes) { polyPath(s.pts); ctx.strokeStyle = "#6b7686"; ctx.lineWidth = 1; ctx.setLineDash(s.mode === "cut" ? [5, 4] : []); ctx.stroke(); ctx.setLineDash([]); }
   } else drawGeometry();
+  drawBars(frame);
   for (const s of scene.supports) drawSupport(s);
   for (const l of scene.loads) drawLoad(l);
   if (frame) drawReactions(frame);
@@ -332,7 +385,7 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 const snap = (v: number) => r4(Math.round(v / scene.h) * scene.h);
 
 function changed(clearResults = true) {
-  if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
+  if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
   $("msg").innerHTML = "";
   localStorage.setItem("stm-scene", JSON.stringify(scene));
   renderList(); draw();
@@ -407,7 +460,7 @@ function reproject() {
 }
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const toast = (msg: string) => { $("msg").innerHTML = `<div class="warn">${msg}</div>`; setTimeout(() => { if ($("msg").textContent === msg) $("msg").innerHTML = ""; }, 3500); };
-const clearFrames = () => { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("csfmOut").innerHTML = ""; if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
+const clearFrames = () => { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("csfmOut").innerHTML = ""; if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
 
 let panning: null | { x: number; y: number } = null;
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -717,6 +770,61 @@ function renderCsfm(m: Msg) {
     : "Nenhuma zona tracionada relevante.";
 }
 $("csfm").onclick = () => { pendingCsfm = true; frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; send({ mode: "elastic", scene }); };
+
+/* ───────────────────────── análise não linear (Nível 2) ───────────────────────── */
+const MODOS: Record<string, string> = {
+  CC: "esmagamento do concreto (ou perda de equilíbrio com o concreto no patamar)", FR: "ruptura da armadura (ε ≥ εu)",
+  divergencia: "divergência numérica", lambdaMax: "carga máxima do cálculo", interrompida: "interrompida pelo usuário",
+};
+function renderNl() {
+  const m = frames[+slider.value], el = $("nlOut");
+  if (!m?.nl) { el.innerHTML = ""; return; }
+  const n = m.nl, P = n.lambda * (m.P0 ?? 0);
+  let h = `<b>Carga aplicada: ${P.toFixed(0)} kN</b> (λ = ${n.lambda.toFixed(3)} × ${(m.P0 ?? 0).toFixed(0)} kN de referência)<br>`;
+  h += n.mode ? `Modo de ruptura: <b>${MODOS[n.mode] ?? n.mode}</b><br>` : "Em andamento…<br>";
+  h += `Deformação de compressão: ${(n.crushStrain * 1000).toFixed(2)} ‰ ${n.crushLength > 0 ? `(média em ${n.crushLength} m)` : "(pontual)"} de ${(n.epsCu * 1000).toFixed(1)} ‰ · máx. pontual ${(n.maxEpsC * 1000).toFixed(1)} ‰<br>`;
+  if (n.bars.length) {
+    h += "<table><tr><th>barra</th><th>N máx (kN)</th><th>ε (‰)</th><th>escoou</th></tr>" +
+      n.bars.map((b) => `<tr><td>${esc(b.label)}</td><td>${b.axialMax.toFixed(0)}</td><td>${(b.strainMax * 1000).toFixed(2)}</td><td>${b.yielded ? "sim" : "não"}</td></tr>`).join("") + "</table>";
+  }
+  if (n.mode && m.reactions.length) h += `Reações: ${m.reactions.map((r) => `${esc(r.id)} Ry=${r.ry.toFixed(0)} kN`).join(" · ")} · resíduo de equilíbrio ${(Math.max(n.equilibrium.x, n.equilibrium.y) * 100).toExponential(1)} %<br>`;
+  h += "<i>Resultado do Nível 2 (sem kc2 nem tension stiffening): serve para equilíbrio e capacidade, não é projeto.</i>";
+  el.innerHTML = h;
+}
+function renderBars() {
+  const el = $("barsList"), bars = scene.bars ?? [];
+  if (!bars.length) { el.innerHTML = '<small class="note">Este exemplo não tem armadura: a análise considera só o concreto (sem tração).</small>'; return; }
+  el.innerHTML = '<h2 style="margin-top:10px">Armadura</h2>';
+  const g = document.createElement("div"); g.className = "grid2"; g.style.gridTemplateColumns = "1.4fr 1fr 1fr";
+  const head = (t: string) => { const d = document.createElement("small"); d.className = "note"; d.textContent = t; g.appendChild(d); };
+  head("barra"); head("As (cm²)"); head("fy (MPa)");
+  for (const b of bars) {
+    const name = document.createElement("small"); name.textContent = b.label; name.title = `${b.path.length} pontos · aderência perfeita`; g.appendChild(name);
+    const mk = (get: () => number, set: (v: number) => void) => {
+      const i = document.createElement("input"); i.type = "number"; i.step = "any"; i.min = "0"; i.value = String(Math.round(get() * 1000) / 1000);
+      i.onchange = () => { const v = +i.value; if (v > 0) { set(v); changed(); } else i.value = String(get()); };
+      g.appendChild(i);
+    };
+    mk(() => b.areaCm2, (v) => (b.areaCm2 = v)); mk(() => b.fy, (v) => { b.fy = v; b.ft = Math.max(b.ft, v * 1.05); });
+  }
+  el.appendChild(g);
+}
+function syncNl() {
+  const nl = scene.nl ?? { values: "design" as const, epsCu: 0.0035, crushLength: 0 };
+  $<HTMLSelectElement>("nlValues").value = nl.values; $<HTMLInputElement>("nlEpsCu").value = String(Math.round(nl.epsCu * 10000) / 10);
+  $<HTMLInputElement>("nlCrush").value = String(nl.crushLength);
+  renderBars();
+  $("presetNote").textContent = presetSel.value.includes("S1") ? "Ensaio: 556 kN por apoio real (P/4 → 2224 kN no total); CSFM do livro: 568–629 kN. Malha de 40 mm: rápido (≈ 10 s); 20 mm: ≈ 4 min." : "";
+}
+const readNl = () => { scene.nl = { values: $<HTMLSelectElement>("nlValues").value as "mean" | "design", epsCu: Math.max(0.001, +$<HTMLInputElement>("nlEpsCu").value / 1000), crushLength: Math.max(0, +$<HTMLInputElement>("nlCrush").value) }; };
+for (const id of ["nlValues", "nlEpsCu", "nlCrush"]) $(id).onchange = () => { readNl(); changed(); };
+$("nl").onclick = () => {
+  if ($("nl").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
+  readNl(); localStorage.setItem("stm-scene", JSON.stringify(scene));
+  frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; $("nlOut").innerHTML = "";
+  $("nl").textContent = "Parar";
+  send({ mode: "nl", scene });
+};
 /* ───────────────────────── execução ───────────────────────── */
 /** nova execução: invalida o que ainda chega da anterior */
 const send = (msg: object) => { curToken++; worker.postMessage({ ...msg, token: curToken }); };
@@ -726,7 +834,7 @@ const showMsg = (errors: string[], warnings: string[]) => {
 worker.onmessage = (ev: MessageEvent<Msg | { kind: "error"; token: number; errors: string[]; warnings: string[] }>) => {
   const m = ev.data;
   if (m.token !== curToken) return;
-  if (m.kind === "error") { showMsg(m.errors, m.warnings); $("run").textContent = "Otimizar"; return; }
+  if (m.kind === "error") { showMsg(m.errors, m.warnings); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; return; }
   if (m.warnings?.length) showMsg([], m.warnings);
   frames.push(m);
   if (m.elastic && pendingCsfm) {
@@ -736,13 +844,15 @@ worker.onmessage = (ev: MessageEvent<Msg | { kind: "error"; token: number; error
     $<HTMLSelectElement>("view").value = "csfm";
     renderCsfm(m);
   }
+  if (m.nl && frames.length === 1 && !$<HTMLSelectElement>("view").value.startsWith("nl")) $<HTMLSelectElement>("view").value = "nlconc";
   slider.max = String(frames.length - 1);
   if (!m.done || frames.length === 1 || +slider.value >= frames.length - 2) slider.value = String(frames.length - 1);
-  renderStats(); renderReactions(); draw();
-  $("run").textContent = m.done ? "Otimizar" : "Parar";
+  renderStats(); renderReactions(); renderNl(); draw();
+  if (m.nl) $("nl").textContent = m.done ? NL_LABEL : "Parar"; else $("run").textContent = m.done ? "Otimizar" : "Parar";
 };
 function renderStats() {
   const m = frames[+slider.value]; if (!m) return;
+  if (m.nl) { $("stats").textContent = `passo ${m.iter}\nλ = ${m.nl.lambda.toFixed(3)} (P = ${(m.nl.lambda * (m.P0 ?? 0)).toFixed(0)} kN)` + (m.done ? "\nconcluído" : ""); return; }
   $("stats").textContent = m.elastic
     ? "Campo elástico do domínio cheio\n(pré-análise, sem otimização)"
     : `iter ${m.iter}\nflexibilidade ${m.compliance.toExponential(3)}\nvolume ${(m.volume * 100).toFixed(1)}%\nmudança ${(m.change * 100).toFixed(2)}%` + (m.done ? "\nconcluído" : "");
@@ -763,7 +873,7 @@ $("clearAll").onclick = () => {
 };
 $<HTMLInputElement>("vf").oninput = (e) => ($("vfv").textContent = (e.target as HTMLInputElement).value);
 $<HTMLInputElement>("rmin").oninput = (e) => ($("rv").textContent = (e.target as HTMLInputElement).value);
-slider.oninput = () => { renderStats(); renderReactions(); draw(); };
+slider.oninput = () => { renderStats(); renderReactions(); renderNl(); draw(); };
 $("view").onchange = draw;
 $("showMesh").onchange = draw;
 $<HTMLInputElement>("elemSize").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { scene.h = v; changed(); } };
@@ -815,6 +925,7 @@ presetSel.onchange = () => {
   syncFields(); changed(); renderProps(); fitView(); draw();
 };
 function syncFields() {
+  syncNl();
   $<HTMLInputElement>("fck").value = String(clampFck(scene.fck ?? 30));
   $<HTMLInputElement>("thick").value = String(scene.t);
   $<HTMLInputElement>("elemSize").value = String(scene.h);
