@@ -1037,3 +1037,19 @@ function syncFields() {
 }
 
 updateLock(); setTool("select"); renderList(); syncFields();
+
+/* ───────────────────────── abas do painel lateral ───────────────────────── */
+type TabId = "modelo" | "otim" | "nl";
+function activateTab(id: TabId) {
+  document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
+  document.querySelectorAll<HTMLElement>(".pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === id));
+  try { localStorage.setItem("stm.tab", id); } catch { /* sem armazenamento */ }
+}
+document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((b) => { b.onclick = () => activateTab(b.dataset.tab as TabId); });
+// exemplos de análise não linear abrem direto na aba do Nível 2; os demais, no Modelo
+presetSel.addEventListener("change", () => activateTab(presetSel.value.includes("não linear") ? "nl" : "modelo"));
+{
+  let t: string | null = null;
+  try { t = localStorage.getItem("stm.tab"); } catch { /* ignore */ }
+  activateTab(presetSel.value.includes("não linear") ? "nl" : t === "otim" || t === "nl" ? t : "modelo");
+}

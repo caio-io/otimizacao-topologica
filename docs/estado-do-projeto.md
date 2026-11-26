@@ -90,6 +90,10 @@ Detalhes, tabelas e números em `docs/csfm-roteiro.md`. Resumo:
 - **Nó de pórtico:** converge com o apoio da viga (Ap2) travado em ux e uy (com ele livre na horizontal o 2º passo diverge a ≈ 10 % da carga); exemplo ilustrativo reativado na lista, sensível à malha (100 mm → 1089 kN; 50 mm → 850 kN).
 - **Pendente:** kc2 (só há gráfico no livro; opção `kc2` provisória, desligada) (fórmula não encontrada nas fontes lidas); εud = 10 ‰ da NBR como padrão de projeto; perfis normativos (NBR → EC2 → ACI → fib); módulo de bielas e tirantes manual (estilo CAST); extensão 3D (prompt de pesquisa em preparação, fora do repositório).
 
+### 4.9 Interface reorganizada (nov/2026)
+
+Painel lateral em **abas** (Modelo · Otimização · Nível 2) com cabeçalho do aplicativo, seletor de exemplo no topo, **barra de vista** acima do desenho (vista, malha, iteração) e cartão fixo de estado e reações. Exemplos de análise não linear abrem direto na aba Nível 2; a aba escolhida é lembrada. Todos os identificadores de elementos foram mantidos, então a lógica de `main.ts` não mudou (só o código das abas, no fim do arquivo). Verificado no navegador (S1 em 60 mm roda e mostra resultado e reações). **Próximos passos da interface:** editor de armadura (desenhar no canvas; formas reta, L, U e estribo; As por número × diâmetro), fissuração desenhada como traços perpendiculares à tração principal (exige expor a direção principal por elemento no solver) e nó de pórtico recortado como região D (carga de seção N, V, M; armadura do pilar reta e da viga dobrada).
+
 ## 5. Fontes (`src/` e `src2/`)
 
 | Fonte | Uso no projeto | Lida a fundo? |
