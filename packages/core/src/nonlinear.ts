@@ -99,6 +99,8 @@ export interface NlOptions {
   tangent?: boolean;
   /** rigidez residual do concreto fissurado como fração de E0 (só na matriz; padrão 1e-4) */
   ecrRatio?: number;
+  /** tolerância do 1º passo = tol × este fator (padrão 1): o 1º passo forma o padrão de fissuras e pode estagnar perto da tolerância */
+  firstStepTolFactor?: number;
   /** diagnóstico: chamado a cada iteração do Newton (resíduo relativo, fração da busca linear, nº de elementos fissurados e quantos mudaram de estado) */
   trace?: (t: { lam: number; it: number; rel: number; alpha: number; cracked: number; changed: number; maxEpsC: number }) => void;
   /** amolecimento da compressão por tração transversal: kc2(ε1) multiplica fc (e kc2·ε0 no pico); true usa `kc2Provisional` */
@@ -630,7 +632,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const rhsLam = new Float64Array(ndof), du = new Float64Array(ndof), R = new Float64Array(ndof);
   const useLS = opt.lineSearch ?? true;
   let lsTrials = 0; // total de avaliações extras de resíduo feitas pela busca linear (diagnóstico)
-  const equilibrate = (lam: number, u0: Float64Array, itLimit = maxIt) => {
+  const equilibrate = (lam: number, u0: Float64Array, itLimit = maxIt, tolEff = tol) => {
     let u = u0.slice();
     let nf = 0;
     for (let d = 0; d < ndof; d++) { rhsLam[d] = fixedEff[d] ? 0 : lam * fRef[d]; nf += rhsLam[d] * rhsLam[d]; }
@@ -647,7 +649,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       for (let d = 0; d < ndof; d++) { R[d] = fixedEff[d] ? 0 : rhsLam[d] - asm.fint[d]; nr += R[d] * R[d]; }
       nr = Math.sqrt(nr);
       rel = nr / nf;
-      if (rel < tol) return { ok: true, u, asm, rel, its };
+      if (rel < tolEff) return { ok: true, u, asm, rel, its };
       solveBandedAssembled(asm.L, ndof, bw, fixedEff, R, du);
       // passo completo; com busca linear, se não reduz o resíduo tenta frações do passo e fica com a melhor
       let alphaUsed = 1;
@@ -690,7 +692,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   for (let guard = 0; guard < 2000; guard++) {
     const lamTry = Math.min(lamGood + dl, lamMax);
     // o 1º passo forma todo o padrão de fissuras (independe da escala da carga, pois ft = 0) e pede muitas iterações: dar mais folga a ele
-    const eq = equilibrate(lamTry, uGood, lamGood === 0 ? 4 * maxIt : maxIt);
+    const eq = equilibrate(lamTry, uGood, lamGood === 0 ? 4 * maxIt : maxIt, lamGood === 0 ? tol * (opt.firstStepTolFactor ?? 1) : tol);
     let failMode: NlMode | null = null;
     // classifica pelo estado (convergido ou última iteração): ruptura do aço, esmagamento ou divergência pura
     const epsCheck = opt.crushLength ? crushWin(eq.asm.epsEl) : eq.asm.maxEpsC;
