@@ -20,12 +20,13 @@
     header .grow { flex: 1; }
     header label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: #c9d4e0; }
     header select { width: 320px; margin: 0; background: #2a3a4e; color: #f3f5f8; border: 1px solid #3d5068; }
+    header select#nlCode { width: 160px; }
 
     .layout { display: grid; grid-template-columns: 372px 1fr; min-height: 0; }
 
     /* ── painel lateral com abas ── */
     aside { display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); min-height: 0; }
-    .tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); background: #f6f8fb; }
+    .tabs { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); background: #f6f8fb; }
     .tabs button { width: auto; margin: 0; padding: 11px 6px 9px; border: 0; border-bottom: 3px solid transparent; background: none; color: var(--ink-soft); font-size: 12.5px; font-weight: 600; }
     .tabs button:hover { color: var(--ink); background: #edf1f6; }
     .tabs button.on { color: var(--brand); border-bottom-color: var(--brand); background: var(--panel); }
@@ -95,6 +96,21 @@
     .strip { border-top: 1px solid var(--line-strong); background: #f6f8fb; padding: 5px 12px 6px; max-height: 150px; overflow-y: auto; font-size: 11.5px; color: var(--ink-soft); }
     .strip .hd { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-mute); margin-bottom: 3px; display: flex; justify-content: space-between; }
     .strip table { background: #fff; }
+    .ntable { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 8px; }
+    .ntable th, .ntable td { border: 1px solid var(--line); padding: 4px 6px; text-align: center; vertical-align: middle; }
+    .ntable th:first-child, .ntable td:first-child { text-align: left; color: var(--ink-soft); width: 34%; }
+    .ntable th { background: #f1f4f8; font-size: 11px; }
+    .ntable th.act, .ntable td.act { box-shadow: inset 0 0 0 2px var(--brand); }
+    .ntable td.v { background: #e8f5ec; color: #1b5e34; }
+    .ntable td.p { background: var(--warn-bg); color: var(--warn); }
+    .ntable td.n { color: var(--ink-mute); }
+    .ntable button { margin-top: 3px; padding: 2px 6px; font-size: 11px; width: auto; }
+    .ntable sup { font-size: 9px; }
+    .tag { padding: 0 5px; border-radius: 3px; font-size: 11px; }
+    .tag.v { background: #e8f5ec; color: #1b5e34; } .tag.p { background: var(--warn-bg); color: var(--warn); }
+    details.norma { margin-top: 6px; font-size: 11.5px; color: var(--ink-soft); }
+    details.norma summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+    details.norma ul { margin: 3px 0 4px 16px; padding: 0; }
     .warnbox, .okbox, .meshinfo { border-radius: var(--radius); padding: 6px 9px; font-size: 11.5px; line-height: 1.45; margin-top: 8px; border: 1px solid; }
     .warnbox, .meshinfo.warn { background: var(--warn-bg); color: var(--warn); border-color: #f1d98a; }
     .okbox, .meshinfo.ok { background: #e8f5ec; color: #1b5e34; border-color: #b9dfc6; }
@@ -109,6 +125,14 @@
     <h1>Bielas e Tirantes</h1>
     <span class="sub">otimização topológica · CSFM · análise não linear</span>
     <span class="grow"></span>
+    <label>Norma
+      <select id="nlCode" title="Norma ativa: define fcd, εc2, εcu, a resistência das bielas e as classes de aço. Só a NBR 6118 está totalmente conferida; as demais mostram o que é provisório na aba Normas.">
+        <option value="NBR6118">NBR 6118</option>
+        <option value="EC2">Eurocode 2</option>
+        <option value="MC2010">fib Model Code 2010</option>
+        <option value="ACI318">ACI 318</option>
+      </select>
+    </label>
     <label>Exemplo
       <select id="preset"></select>
     </label>
@@ -120,6 +144,7 @@
         <button data-tab="modelo" class="on" role="tab">Modelo</button>
         <button data-tab="otim" role="tab">Otimização</button>
         <button data-tab="nl" role="tab">Nível 2</button>
+        <button data-tab="normas" role="tab">Normas</button>
       </nav>
 
       <div class="tabpanes">
@@ -175,6 +200,12 @@
           <div class="grid2"><button id="clearRes">Limpar resultados</button><button id="clearAll">Limpar tudo</button></div>
         </section>
 
+        <!-- ───────── Normas: comparação e navegação ───────── -->
+        <section class="pane" data-pane="normas">
+          <small class="note intro">Compare as normas lado a lado para o fck do modelo e <b>escolha qual usar</b> (o seletor <b>Norma</b> do cabeçalho faz o mesmo). A norma ativa define fcd, εc2, εcu, a resistência das bielas (largura mínima da biela) e as classes de aço. Valores em <span class="tag v">verde</span> foram conferidos em fonte; em <span class="tag p">âmbar</span> são <b>provisórios</b>.</small>
+          <div id="normasView"></div>
+        </section>
+
         <!-- ───────── Análise não linear ───────── -->
         <section class="pane" data-pane="nl">
           <div class="warnbox"><b>O que o Nível 2 é e o que não é.</b> Concreto <b>sem tração</b> + barras com <b>aderência perfeita</b> (fissuras girantes, parábola-retângulo): dá a carga última, o modo de ruptura e a força nas barras. <b>Não é a verificação CSFM completa</b> (sem kc2, sem tension stiffening, sem ELS). A capacidade depende da malha (no S1: 539 a 615 kN conforme o elemento): leia como <b>faixa</b>, não como valor exato.</div>
@@ -182,9 +213,6 @@
           <h2>Materiais</h2>
           <label title="Valores médios: fc = fck, sem coeficientes (comparação com ensaios). De projeto: fcd da norma escolhida.">Resistências do concreto
             <select id="nlValues"><option value="mean">Médias (fc = fck, sem coeficientes)</option><option value="design">De projeto (fcd da norma escolhida)</option></select>
-          </label>
-          <label title="Perfil de parâmetros de projeto: γc, αcc, εc2, εcu. Trocar a norma atualiza εcu; os valores podem ser editados em seguida. Veja o que está verificado em docs/csfm-roteiro.md (cada perfil declara o que ainda está pendente).">Norma
-            <select id="nlCode"><option value="NBR6118">NBR 6118 (γc 1,4 · αcc 0,85)</option><option value="EC2">Eurocode 2 (provisório)</option><option value="MC2010">fib Model Code 2010 (provisório)</option><option value="ACI318">ACI 318 (provisório)</option></select>
           </label>
           <div id="codeStatus" class="okbox"></div>
           <div class="grid2">

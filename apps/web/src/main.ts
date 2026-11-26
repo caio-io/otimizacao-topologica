@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { BAR_DIAMETERS, STEEL_CLASSES, barAreaCm2, buildProblem, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { BAR_DIAMETERS, CODE_ORDER, DESIGN_CODES, STEEL_CLASSES, fcdOfCode, strutDesignStrength, barAreaCm2, buildProblem, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { CrushInfo, NlFailure, NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -443,7 +443,7 @@ function changed(clearResults = true) {
   if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
   $("msg").innerHTML = "";
   localStorage.setItem("stm-scene", JSON.stringify(scene));
-  renderList(); updateMeshInfo(); draw();
+  renderList(); updateMeshInfo(); renderNormas(); draw();
 }
 const evPos = (ev: MouseEvent): [number, number] => { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
 
@@ -870,10 +870,10 @@ function renderBars() {
     const row: HTMLElement[] = [];
     const name = document.createElement("small"); name.textContent = b.label; name.title = `${b.id} · ${b.path.length} pontos · aderência perfeita`; row.push(name);
     const sel2 = document.createElement("select");
-    for (const [v, t] of [["CA50", "CA-50"], ["CA60", "CA-60"], ["custom", "Ensaio"]] as const) sel2.add(new Option(t, v));
+    for (const [v, t] of steelOptions(b.steelClass)) sel2.add(new Option(t, v));
     sel2.value = b.steelClass ?? "custom";
     sel2.onchange = () => {
-      const v = sel2.value as "CA50" | "CA60" | "custom"; b.steelClass = v;
+      const v = sel2.value as NonNullable<typeof b.steelClass>; b.steelClass = v;
       if (v !== "custom") { const c = STEEL_CLASSES[v]; b.fy = c.fy; b.ft = c.ft; b.Es = c.Es; b.epsU = c.epsU; }
       changed(); renderBars();
     };
@@ -1063,10 +1063,10 @@ $("biela").onclick = () => {
     F = tot / Math.max(1, scene.supports.length); origem = "carga total ÷ nº de apoios (estimativa; rode o campo elástico para usar a reação)";
   }
   if (!(F > 0)) { toast("Adicione ao menos uma força."); return; }
-  const sig = sigmaRdMax(fck, K_STRUT.biela), a = strutWidth(F, scene.t, fck, K_STRUT.biela);
+  const code = activeCode(), sd = strutDesignStrength(code, fck), sig = sd.sigma, a = Math.abs(F) / (scene.t * sig * 1000);
   const r = Math.min(12, Math.max(1.5, Math.ceil(filterRadiusForWidth(a, scene.h) * 2) / 2));
   $<HTMLInputElement>("rmin").value = String(r); $("rv").textContent = String(r);
-  $("bielaInfo").textContent = `F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa (fck ${fck}, γc ${GAMMA_C}, k = 1,0) · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
+  $("bielaInfo").textContent = `Norma: ${code.short}${sd.verified ? "" : " (PROVISÓRIO)"}${sd.fallback ? " — sem fator de biela conferido, usando a fórmula da NBR" : ""} · F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa [${sd.formula}] · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
 };
 
 const presetSel = $<HTMLSelectElement>("preset");
@@ -1090,7 +1090,7 @@ function syncFields() {
 updateLock(); setTool("select"); renderList(); syncFields();
 
 /* ───────────────────────── abas do painel lateral ───────────────────────── */
-type TabId = "modelo" | "otim" | "nl";
+type TabId = "modelo" | "otim" | "nl" | "normas";
 function activateTab(id: TabId) {
   document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
   document.querySelectorAll<HTMLElement>(".pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === id));
@@ -1102,7 +1102,7 @@ presetSel.addEventListener("change", () => activateTab(presetSel.value.includes(
 {
   let t: string | null = null;
   try { t = localStorage.getItem("stm.tab"); } catch { /* ignore */ }
-  activateTab(presetSel.value.includes("não linear") ? "nl" : t === "otim" || t === "nl" ? t : "modelo");
+  activateTab(presetSel.value.includes("não linear") ? "nl" : t === "otim" || t === "nl" || t === "normas" ? t : "modelo");
 }
 
 
@@ -1117,7 +1117,7 @@ function rebarParams() {
     cover: Math.max(0.005, +$<HTMLInputElement>("rbCover").value / 100 || 0.03),
     dia: +$<HTMLSelectElement>("rbDia").value || 12.5,
     n: Math.max(1, Math.round(+$<HTMLInputElement>("rbN").value) || 1),
-    steel: $<HTMLSelectElement>("rbSteel").value as "CA50" | "CA60",
+    steel: $<HTMLSelectElement>("rbSteel").value as "CA50" | "CA60" | "B500B",
     form: $<HTMLSelectElement>("rbForm").value as "reta" | "L" | "U",
     leg: Math.max(0.05, +$<HTMLInputElement>("rbLeg").value || 0.5),
   };
@@ -1142,7 +1142,9 @@ cv.addEventListener("mouseleave", () => { lastRebarPx = null; if (rebarPreview) 
 for (const id of ["rbCover", "rbDia", "rbN", "rbSteel", "rbForm", "rbLeg"]) $(id).addEventListener("change", () => updateRebarPreview());
 function createRebar() {
   if (!rebarPreview) { toast("Aproxime o mouse de uma face da peça para ver a barra."); return; }
-  const rb = rebarParams(), c = STEEL_CLASSES[rb.steel], bars = (scene.bars ??= []);
+  const rb = rebarParams(), bars = (scene.bars ??= []);
+  if (!(rb.steel in STEEL_CLASSES)) { toast("A norma ativa não tem classe de aço conferida: use um exemplo com barras ou outra norma."); return; }
+  const c = STEEL_CLASSES[rb.steel];
   const k = bars.length + 1;
   const id = newId("B");
   bars.push({
@@ -1212,3 +1214,68 @@ function updateCodeStatus() {
 }
 $("nlCode").addEventListener("change", updateCodeStatus);
 updateCodeStatus();
+
+
+/* ───────────────────────── normas: navegação e comparação ───────────────────────── */
+function activeCode() { return codeById($<HTMLSelectElement>("nlCode").value); }
+/** classes de aço oferecidas pela norma ativa (+ "Ensaio"); mantém a classe atual da barra mesmo se for de outra norma */
+function steelOptions(current?: string): [string, string][] {
+  const code = activeCode();
+  const out: [string, string][] = code.steelClasses.map((k) => [k, STEEL_CLASSES[k].label]);
+  if (current && current !== "custom" && !code.steelClasses.includes(current as never) && current in STEEL_CLASSES)
+    out.push([current, `${STEEL_CLASSES[current as keyof typeof STEEL_CLASSES].label} (fora da norma)`]);
+  out.push(["custom", "Ensaio"]);
+  return out;
+}
+function fillRebarSteel() {
+  const sel = $<HTMLSelectElement>("rbSteel"), cur = sel.value;
+  sel.innerHTML = "";
+  const code = activeCode();
+  for (const k of code.steelClasses) sel.add(new Option(STEEL_CLASSES[k].label, k));
+  if (!code.steelClasses.length) sel.add(new Option("— sem classe conferida —", "none"));
+  if (Array.from(sel.options).some((o) => o.value === cur)) sel.value = cur;
+}
+function renderNormas() {
+  const el = $("normasView");
+  if (!el) return;
+  const fck = clampFck(scene.fck ?? 30), act = activeCode().id;
+  type Cell = { t: string; ok?: boolean };
+  const num = (v: number, d = 2) => v.toFixed(d).replace(".", ",");
+  const rows: [string, (c: (typeof DESIGN_CODES)[keyof typeof DESIGN_CODES]) => Cell][] = [
+    ["γc", (c) => ({ t: num(c.gammaC, 2), ok: c.fields.gammaC })],
+    ["αcc", (c) => ({ t: num(c.alphaCc, 2), ok: c.fields.alphaCc })],
+    [`fcd (MPa) para fck = ${String(fck).replace(".", ",")}`, (c) => ({ t: num(fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc })],
+    ["εc2 (‰)", (c) => ({ t: num(c.epsC0 * 1000, 1), ok: c.fields.epsC0 })],
+    ["εcu (‰)", (c) => ({ t: num(c.epsCu * 1000, 1), ok: c.fields.epsCu })],
+    ["γs", (c) => ({ t: num(c.gammaS, 2), ok: c.fields.gammaS })],
+    ["εud do aço (‰)", (c) => (c.epsUd == null ? { t: "não conferido" } : { t: num(c.epsUd * 1000, 1), ok: c.fields.epsUd })],
+    ["Aço passivo", (c) => (c.steelClasses.length ? { t: c.steelClasses.map((k) => STEEL_CLASSES[k].label).join(", "), ok: c.fields.steel } : { t: "não conferido" })],
+    ["Biela comum σRd,máx (MPa)", (c) => { const d = strutDesignStrength(c, fck); return { t: num(d.sigma, 1) + (d.fallback ? " (fórmula NBR)" : ""), ok: d.verified && !d.fallback }; }],
+    ["Biela com tração transversal (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionNormal(fck) * fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc } : { t: "não conferido" })],
+    ["Biela com tração oblíqua (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionOblique(fck) * fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc } : { t: "não conferido" })],
+    ["φ (bielas e tirantes)", (c) => (c.phi != null ? { t: num(c.phi, 2), ok: true } : { t: "—" })],
+  ];
+  let h = '<table class="ntable"><tr><th>Parâmetro</th>' + CODE_ORDER.map((id) => {
+    const c = DESIGN_CODES[id];
+    return `<th class="${id === act ? "act" : ""}">${esc(c.short)}<br>${id === act ? "<small>ativa</small>" : `<button data-code="${id}">Usar</button>`}</th>`;
+  }).join("") + "</tr>";
+  for (const [label, f] of rows) {
+    h += `<tr><td>${esc(label)}</td>` + CODE_ORDER.map((id) => {
+      const c = f(DESIGN_CODES[id]);
+      const cls = c.ok === undefined ? "n" : c.ok ? "v" : "p";
+      return `<td class="${cls} ${id === act ? "act" : ""}">${esc(c.t)}${c.ok === false ? "<sup> prov.</sup>" : ""}</td>`;
+    }).join("") + "</tr>";
+  }
+  h += "</table>";
+  for (const id of CODE_ORDER) {
+    const c = DESIGN_CODES[id];
+    h += `<details class="norma"${id === act ? " open" : ""}><summary>${esc(c.name)}: o que está conferido e o que falta</summary>` +
+      `<b>Conferido</b><ul>${c.status.verificado.map((t) => `<li>${esc(t)}</li>`).join("")}</ul><b>Pendente</b><ul>${c.status.pendente.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></details>`;
+  }
+  el.innerHTML = h;
+  el.querySelectorAll<HTMLButtonElement>("button[data-code]").forEach((b) => { b.onclick = () => { const s2 = $<HTMLSelectElement>("nlCode"); s2.value = b.dataset.code!; s2.dispatchEvent(new Event("change")); }; });
+}
+// trocar a norma atualiza aço, barras e a tabela comparativa
+$("nlCode").addEventListener("change", () => { fillRebarSteel(); renderBars(); renderNormas(); });
+fillRebarSteel();
+renderNormas();

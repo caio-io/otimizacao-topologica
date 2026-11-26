@@ -53,7 +53,7 @@ export interface BarSpec {
   /** área TOTAL da armadura da barra [cm²] (já somadas as barras ao longo da espessura) */
   areaCm2: number;
   /** classe do aço: CA-50 / CA-60 (valores de projeto, definidos em `STEEL_CLASSES`) ou "custom" (valores abaixo, p. ex. medidos em ensaio) */
-  steelClass?: "CA50" | "CA60" | "custom";
+  steelClass?: "CA50" | "CA60" | "B500B" | "custom";
   /** escoamento e resistência à tração [MPa], módulo [GPa], deformação de ruptura (fração) */
   fy: number; ft: number; Es: number; epsU: number;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DESIGN_CODES, codeById, concreteFromScene, fcdOfCode, nbrConcrete, pierCapScene } from "../src";
+import { DESIGN_CODES, STEEL_CLASSES, codeById, concreteFromScene, fcdOfCode, nbrConcrete, pierCapScene, sigmaRdMax, strutDesignStrength } from "../src";
 
 describe("perfis normativos (a norma é um dado)", () => {
   it("o padrão NBR 6118 reproduz o concreto de projeto usado até aqui", () => {
@@ -28,5 +28,20 @@ describe("perfis normativos (a norma é um dado)", () => {
   it("norma desconhecida cai na NBR 6118 e todo perfil declara o que ainda está pendente", () => {
     expect(codeById("xyz").id).toBe("NBR6118");
     for (const c of Object.values(DESIGN_CODES)) expect(c.status.pendente.length).toBeGreaterThan(0);
+  });
+  it("resistência de biela por norma: NBR pela fórmula de Borges; EC2 e MC2010 pelo fator do livro × fcd; ACI cai na NBR com aviso", () => {
+    expect(strutDesignStrength(DESIGN_CODES.NBR6118, 30).sigma).toBeCloseTo(sigmaRdMax(30), 9);
+    expect(strutDesignStrength(DESIGN_CODES.EC2, 30).sigma).toBeCloseTo(20, 9); // 1,00·30/1,5
+    expect(strutDesignStrength(DESIGN_CODES.MC2010, 50).sigma).toBeCloseTo(Math.cbrt(30 / 50) * 50 / 1.5, 9);
+    const aci = strutDesignStrength(DESIGN_CODES.ACI318, 30);
+    expect(aci.fallback).toBe(true); expect(aci.verified).toBe(false);
+    expect(strutDesignStrength(DESIGN_CODES.EC2, 30).verified).toBe(false); // γc e αcc ainda provisórios
+  });
+  it("classes de aço por norma: B500B tem ft/fy = 1,08 e εu = 5 % (livro do CSFM, p. 22)", () => {
+    expect(DESIGN_CODES.NBR6118.steelClasses).toEqual(["CA50", "CA60"]);
+    expect(DESIGN_CODES.EC2.steelClasses).toEqual(["B500B"]);
+    expect(DESIGN_CODES.ACI318.steelClasses).toEqual([]);
+    const b = STEEL_CLASSES.B500B;
+    expect(b.ft / b.fy).toBeCloseTo(1.08, 9); expect(b.epsU).toBe(0.05);
   });
 });

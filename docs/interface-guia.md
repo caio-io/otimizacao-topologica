@@ -63,6 +63,7 @@ O resultado **não substitui o projeto de um engenheiro responsável** (aviso fi
 ```
 
 ### 3.1 Cabeçalho
+- **Norma** (`#nlCode`): NBR 6118, Eurocode 2, fib Model Code 2010 ou ACI 318. É global: define fcd, εc2, εcu, a resistência de biela (largura mínima da biela) e as classes de aço oferecidas (NBR: CA-50/CA-60; EC2 e MC2010: B500B; ACI: nenhuma conferida). Só a NBR 6118 está conferida; as outras mostram o que é provisório.
 - **Exemplo** (`#preset`): modelos prontos + "— minha geometria —". Trocar de exemplo substitui a cena.
 
 ### 3.2 Aba *Modelo*
@@ -74,6 +75,9 @@ O resultado **não substitui o projeto de um engenheiro responsável** (aviso fi
 - **Otimização topológica:** método (`#method`: BESO ou SIMP), fração de volume (`#vf`, 0,15–0,70), raio do filtro em elementos (`#rmin`, 1,5–12), *Ajustar filtro pela largura da biela* (`#biela`, texto em `#bielaInfo`), *Otimizar* (`#run`, vira *Parar* durante a execução), *Campo elástico* (`#elastic`).
 - **CSFM linear:** *CSFM — armadura sugerida* (`#csfm`), resultado em `#csfmOut`.
 - **Resultados:** *Limpar resultados* (`#clearRes`) e *Limpar tudo* (`#clearAll`).
+
+### 3.3b Aba *Normas*
+Comparação lado a lado das quatro normas para o fck do modelo (γc, αcc, fcd, εc2, εcu, γs, εud, aço, biela comum e com tração, φ). Célula **verde** = conferida em fonte, **âmbar** = provisória, "não conferido" = ainda sem dado. Botão **Usar** na coluna ativa a norma (equivale ao seletor do cabeçalho). Embaixo, por norma, a lista do que está conferido e do que falta.
 
 ### 3.4 Aba *Nível 2*
 - Texto explicando o que o modelo é e o que **não** é (sem kc2, sem tension stiffening, sem ELS).

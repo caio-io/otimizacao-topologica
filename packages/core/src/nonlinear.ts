@@ -50,6 +50,8 @@ export const ca50: SteelLaw = { fy: 500e3 / 1.15, ft: 1.08 * (500e3 / 1.15), Es:
 export const STEEL_CLASSES = {
   CA50: { label: "CA-50", fy: 500 / 1.15, ft: (1.08 * 500) / 1.15, Es: 210, epsU: 0.05 },
   CA60: { label: "CA-60", fy: 600 / 1.15, ft: (1.05 * 600) / 1.15, Es: 210, epsU: 0.025 },
+  /** aço europeu B500B: ft/fy = 1,08 e εu = 5 % (livro do CSFM, p. 22); γs = 1,15 e Es = 200 GPa são PROVISÓRIOS (EC2/MC2010) */
+  B500B: { label: "B500B", fy: 500 / 1.15, ft: (1.08 * 500) / 1.15, Es: 200, epsU: 0.05 },
 } as const;
 export type SteelClass = keyof typeof STEEL_CLASSES;
 
