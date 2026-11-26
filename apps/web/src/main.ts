@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { BAR_DIAMETERS, STEEL_CLASSES, barAreaCm2, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { BAR_DIAMETERS, STEEL_CLASSES, barAreaCm2, buildProblem, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { CrushInfo, NlFailure, NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -59,6 +59,7 @@ interface NlInfo {
   /** janela crítica de esmagamento (cada passo), falha final e início do patamar (último quadro) */
   crush?: CrushInfo; failure?: NlFailure; firstPlateau?: { lambda: number; step: number } | null;
 }
+const STRIP_EMPTY = "Nenhuma análise não linear calculada. Use <b>Rodar análise não linear</b> na aba Nível 2.";
 const frames: Msg[] = [];
 type CsfmData = ReturnType<typeof tensionZones>;
 const csfmData = new WeakMap<Msg, CsfmData>();
@@ -384,6 +385,7 @@ let rebarPreview: { path: [number, number][]; a: [number, number]; b: [number, n
 
 function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
+  renderLegend();
   const frame = frames[+slider.value];
   if (frame) {
     drawResult(frame, $<HTMLSelectElement>("view").value, $<HTMLInputElement>("showMesh").checked);
@@ -438,10 +440,10 @@ const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 const snap = (v: number) => r4(Math.round(v / scene.h) * scene.h);
 
 function changed(clearResults = true) {
-  if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
+  if (clearResults) { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY; frames.length = 0; slider.max = "0"; $("stats").textContent = ""; $("csfmOut").innerHTML = ""; renderReactions(); }
   $("msg").innerHTML = "";
   localStorage.setItem("stm-scene", JSON.stringify(scene));
-  renderList(); draw();
+  renderList(); updateMeshInfo(); draw();
 }
 const evPos = (ev: MouseEvent): [number, number] => { const r = cv.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
 
@@ -513,7 +515,7 @@ function reproject() {
 }
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const toast = (msg: string) => { $("msg").innerHTML = `<div class="warn">${msg}</div>`; setTimeout(() => { if ($("msg").textContent === msg) $("msg").innerHTML = ""; }, 3500); };
-const clearFrames = () => { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("csfmOut").innerHTML = ""; if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
+const clearFrames = () => { curToken++; worker.postMessage({ stop: true }); $("run").textContent = "Otimizar"; $("nl").textContent = NL_LABEL; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY; $("csfmOut").innerHTML = ""; if (frames.length) { frames.length = 0; slider.max = "0"; renderReactions(); } };
 
 let panning: null | { x: number; y: number } = null;
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -841,6 +843,7 @@ function renderNl() {
   h += n.mode ? `Modo de ruptura: <b>${MODOS[n.mode] ?? n.mode}</b><br>` : "Em andamento…<br>";
   h += `Deformação de compressão: ${(n.crushStrain * 1000).toFixed(2)} ‰ ${n.crushLength > 0 ? `(média em ${n.crushLength} m)` : "(pontual)"} de ${(n.epsCu * 1000).toFixed(1)} ‰ · máx. pontual ${(n.maxEpsC * 1000).toFixed(1)} ‰<br>`;
   const P0 = m.P0 ?? 0;
+  let tbl = "";
   if (n.failure?.crush) {
     const c = n.failure.crush;
     h += `<b style="color:#7b1e12">Falha por compressão do concreto</b> na região (${c.x.toFixed(2)}; ${c.y.toFixed(2)}) m: ε médio ${(c.strain * 1000).toFixed(2)} ‰ de ${(c.limit * 1000).toFixed(1)} ‰ na janela de ${(c.window.x1 - c.window.x0).toFixed(2)} × ${(c.window.y1 - c.window.y0).toFixed(2)} m; pico pontual ${(c.peak.strain * 1000).toFixed(1)} ‰ em (${c.peak.x.toFixed(2)}; ${c.peak.y.toFixed(2)}).<br>`;
@@ -848,12 +851,13 @@ function renderNl() {
   if (n.failure?.bar) h += `<b style="color:#a93226">Ruptura da barra ${esc(n.failure.bar.label)}</b>${n.failure.bar.at ? ` perto de (${n.failure.bar.at.x.toFixed(2)}; ${n.failure.bar.at.y.toFixed(2)}) m` : ""}.<br>`;
   if (n.firstPlateau) h += `O concreto entrou no patamar de compressão (≥ 95 % de ε0) em λ = ${n.firstPlateau.lambda.toFixed(3)} (P ≈ ${(n.firstPlateau.lambda * P0).toFixed(0)} kN, passo ${n.firstPlateau.step}).<br>`;
   if (n.bars.length) {
-    h += "<table><tr><th>barra</th><th>N máx (kN)</th><th>ε (‰)</th><th>escoou</th><th>escoou em P (kN)</th></tr>" +
+    tbl = "<table><tr><th>barra</th><th>N máx (kN)</th><th>ε (‰)</th><th>escoou</th><th>escoou em P (kN)</th></tr>" +
       n.bars.map((b) => `<tr><td>${esc(b.label)}</td><td>${b.axialMax.toFixed(0)}</td><td>${(b.strainMax * 1000).toFixed(2)}</td><td>${b.yielded ? "sim" : "não"}</td><td>${b.yieldLambda != null ? (b.yieldLambda * P0).toFixed(0) : "—"}</td></tr>`).join("") + "</table>";
   }
   if (n.mode && m.reactions.length) h += `Reações: ${m.reactions.map((r) => `${esc(r.id)} Ry=${r.ry.toFixed(0)} kN`).join(" · ")} · resíduo de equilíbrio ${(Math.max(n.equilibrium.x, n.equilibrium.y) * 100).toExponential(1)} %<br>`;
   h += "<i>Resultado do Nível 2 (sem kc2 nem tension stiffening): serve para equilíbrio e capacidade, não é projeto.</i>";
   el.innerHTML = h;
+  $("resultsStrip").innerHTML = `<b>P = ${P.toFixed(0)} kN</b> (λ = ${n.lambda.toFixed(3)}) · modo: <b>${MODOS[n.mode ?? ""] ?? (n.mode ?? "em andamento")}</b>${n.failure?.crush ? ` · esmagamento em (${n.failure.crush.x.toFixed(2)}; ${n.failure.crush.y.toFixed(2)}) m` : ""}${tbl ? "<br>" + tbl : ""}`;
 }
 function renderBars() {
   const el = $("barsList"), bars = scene.bars ?? [];
@@ -901,7 +905,7 @@ $("nlCode").onchange = () => { $<HTMLInputElement>("nlEpsCu").value = String(Mat
 $("nl").onclick = () => {
   if ($("nl").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
   readNl(); localStorage.setItem("stm-scene", JSON.stringify(scene));
-  frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; $("nlOut").innerHTML = "";
+  frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY;
   if (scene.bars?.length && scene.h > 0.05) showMsg([], [`Malha grossa (elemento de ${scene.h} m): a capacidade costuma ser SUPERESTIMADA (na S1, 0,1 m dá cerca de 50 % a mais que 0,04 m). Use 0,04 m ou menos para um resultado confiável.`]);
   $("nl").textContent = "Parar";
   send({ mode: "nl", scene });
@@ -1076,7 +1080,7 @@ presetSel.onchange = () => {
   syncFields(); changed(); renderProps(); fitView(); draw();
 };
 function syncFields() {
-  syncNl();
+  syncNl(); updateMeshInfo();
   $<HTMLInputElement>("fck").value = String(clampFck(scene.fck ?? 30));
   $<HTMLInputElement>("thick").value = String(scene.t);
   $<HTMLInputElement>("elemSize").value = String(scene.h);
@@ -1147,3 +1151,64 @@ function createRebar() {
   });
   changed(); renderBars();
 }
+
+
+/* ───────────────────────── legenda por vista, coordenadas, malha e norma ───────────────────────── */
+var GRAD_COMP = "linear-gradient(90deg,#e9edf2,#ffb8a8,#7b1e12)";
+var GRAD_BAR = "linear-gradient(90deg,hsl(120,80%,42%),hsl(60,80%,42%),hsl(0,80%,42%))";
+var LEGENDS: Record<string, [string, string][]> = {
+  topo: [["#c0392b", "tração (tirante)"], ["#1f5fbf", "compressão (biela)"], ["#9aa5b4", "material (resultado da otimização)"]],
+  def: [["#c3ccd8", "contorno original"], ["#1f5fbf", "deformada (ampliada)"]],
+  csfm: [["#e8a09a", "zona tracionada (armadura sugerida)"], ["#8a2a1d", "barra sugerida"]],
+  s1: [["#c0392b", "tração principal σ1 (mais escuro = maior)"]],
+  s2: [["#1f5fbf", "compressão principal σ2 (mais escuro = maior)"]],
+  nlconc: [[GRAD_COMP, "compressão / εcu: 0 → 100 %"], ["#7b1e12", "esmagado (≥ εcu)"], ["dash", "janela crítica de esmagamento"], [GRAD_BAR, "barra: 0 → 100 % de fy"]],
+  nlcrack: [["#bcd6f2", "concreto fissurado (ε1 > 0)"], [GRAD_BAR, "barra: 0 → 100 % de fy"], ["hsl(215,60%,45%)", "barra comprimida"], ["dash", "janela crítica de esmagamento"]],
+  nlstress: [[GRAD_COMP, "|σ3| / fc: 0 → 100 %"], ["#7b1e12", "atingiu fc"], ["dash", "janela crítica de esmagamento"]],
+};
+var lastLegend = "";
+function renderLegend() {
+  if (typeof LEGENDS === "undefined") return; // draw() pode rodar antes de este bloco ser inicializado
+  const sel = $<HTMLSelectElement>("view"), v = sel.value;
+  const key = v + "|" + (frames.length ? "r" : "g");
+  if (key === lastLegend) return;
+  lastLegend = key;
+  const rows = LEGENDS[v] ?? LEGENDS.topo;
+  $("legend").innerHTML = `<div class="ttl">${esc(sel.selectedOptions[0]?.textContent ?? "")}</div>` +
+    rows.map(([c, t]) => `<div class="row"><i class="sw ${c === "dash" ? "dash" : ""}" style="${c === "dash" ? "" : `background:${c}`}"></i>${esc(t)}</div>`).join("");
+}
+$("view").addEventListener("change", () => { lastLegend = ""; renderLegend(); });
+renderLegend();
+
+cv.addEventListener("mousemove", (ev) => {
+  const [px, py] = evPos(ev), [x, y] = toWorld(px, py);
+  $("coords").innerHTML = `X: <b>${x.toFixed(2)}</b> m · Y: <b>${y.toFixed(2)}</b> m`;
+});
+cv.addEventListener("mouseleave", () => { $("coords").innerHTML = "X: <b>—</b> m · Y: <b>—</b> m"; });
+
+var meshTimer = 0;
+function updateMeshInfo() {
+  window.clearTimeout(meshTimer);
+  meshTimer = window.setTimeout(() => {
+    const el = $("meshInfo");
+    try {
+      const r = buildProblem(scene), p = r.problem;
+      if (!p) { el.className = "meshinfo bad"; el.textContent = r.errors[0] ?? "Modelo inválido."; return; }
+      let n = 0; for (const v of p.mask) if (v) n++;
+      const nf = n.toLocaleString("pt-BR");
+      if (scene.h > 0.05) { el.className = "meshinfo warn"; el.innerHTML = `<b>${nf} elementos</b> · h = ${scene.h} m. <b>Malha grossa</b>: a capacidade do Nível 2 costuma ser superestimada (na S1, 0,1 m dá ~50 % a mais que 0,04 m).`; }
+      else if (n > 12000) { el.className = "meshinfo warn"; el.innerHTML = `<b>${nf} elementos</b> · h = ${scene.h} m. Malha pesada: a análise pode levar minutos (limite de 20 000).`; }
+      else { el.className = "meshinfo ok"; el.innerHTML = `<b>${nf} elementos</b> · h = ${scene.h} m. Malha adequada (limite de 20 000).`; }
+    } catch (e) { el.className = "meshinfo bad"; el.textContent = String((e as Error).message ?? e); }
+  }, 120);
+}
+updateMeshInfo();
+
+function updateCodeStatus() {
+  const c = codeById($<HTMLSelectElement>("nlCode").value), el = $("codeStatus");
+  const ok = c.id === "NBR6118";
+  el.className = ok ? "okbox" : "warnbox";
+  el.innerHTML = (ok ? "<b>NBR 6118: parâmetros conferidos.</b> " : `<b>${esc(c.name)}: PROVISÓRIO.</b> Só a NBR 6118 está conferida. `) + `Pendente: ${esc(c.status.pendente.join("; "))}.`;
+}
+$("nlCode").addEventListener("change", updateCodeStatus);
+updateCodeStatus();

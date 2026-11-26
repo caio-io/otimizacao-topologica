@@ -145,7 +145,7 @@ Limites: **20 000 elementos** por malha; abaixo de h = 0,05 m a malha é conside
 
 **Dicas ao passar o mouse (Nível 2):** na vista de fissuração, ε1 (tração) e se está fissurado; na de tensões, σ1, σ3 e cisalhamento; sobre uma barra, a força e o percentual de fy. Na lista de barras, passar o mouse realça a barra no desenho (e vice-versa).
 
-A **legenda** (canto superior direito do canvas) hoje é fixa (tração vermelha, compressão azul) e não muda por vista. Rótulos das barras (nome) são desenhados sobre o canvas.
+A **legenda** (canto superior direito do canvas) agora muda com a vista (título da vista, cores e gradientes, contorno tracejado da janela de esmagamento). Há também a **leitura de coordenadas** do cursor (X, Y em m) no canto superior esquerdo, o **indicador de malha** na aba Modelo (número de elementos, aviso de malha grossa acima de h = 0,05 m e de malha pesada acima de 12 000), a **faixa de resultados** abaixo do desenho (carga, modo, local do esmagamento e tabela de barras com a carga de escoamento) e, na aba Nível 2, o **aviso permanente** do que o Nível 2 não é e a **faixa de status da norma** (verde para a NBR 6118 conferida; amarela para as provisórias, com o que está pendente). Rótulos das barras (nome) são desenhados sobre o canvas.
 
 ---
 
