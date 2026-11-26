@@ -326,3 +326,20 @@ O ramo CSFM não alterou `beso.ts`, `simp.ts` nem `stress.ts`; mudou só o eleme
 | com abertura | SIMP | 0,2 % | 1,239e7 / 1,239e7 |
 
 SIMP praticamente não muda; BESO muda a topologia em 5–9 % dos elementos com diferença de flexibilidade ≤ 1 % (problema não convexo, variação dentro do esperado). Conclusão: a troca de elemento não alterou a otimização de forma relevante.
+
+## Conferência dos parâmetros das normas (nov/2026)
+
+Fontes disponíveis para nós: **fib Model Code 2010** (Boletim 65, versão final do vol. 1, e Boletim 56, primeira versão completa do vol. 2, em `src-fib`) e o livro do CSFM. **NBR 6118, EN 1992-1-1 e ACI 318 em si não estão disponíveis**; só pudemos checar o EC2 e o ACI em fontes secundárias (buscas na web: Dlubal, anexo nacional do Chipre, apresentação do ACI). Cada campo dos perfis em `codes.ts` traz agora o estado: **fonte primária / só fonte secundária / provisório**; a interface mostra verde, azul e âmbar.
+
+**fib MC2010: todos os parâmetros do perfil conferidos em fonte primária.**
+- γc = 1,5 e γs = 1,15 (persistente/transitória; acidental 1,2 e 1,0): Boletim 65, Tab. 4.5-8, p. 99; Boletim 56, Eq. 7.2-11 (p. 19) e Eq. 7.2-25 (p. 25). Derivação: γC = 1,10·1,39 ≅ 1,50 e γS = 1,08·1,08 ≅ 1,15 (Boletim 65, p. 95).
+- fcd = αcc·fck/γc; **"um limite inferior para αcc é 0,85"** (Boletim 56, p. 19); o texto cita 0,9–1,0 para o efeito combinado. **O programa passou a usar αcc = 0,85 no MC2010** (lado seguro; antes 1,0 provisório).
+- Parábola-retângulo (Eq. 7.2-13/14): εc2 = 2,0 ‰ e εcu2 = 3,5 ‰ para fck ≤ 50 MPa (Tab. 7.2-1, p. 17; Fig. 7.2-11, p. 22); para fck > 50 MPa as fórmulas existem na tabela, ainda não implementadas.
+- Aço: Es = 200 GPa (Boletim 65, p. 186, Fig. 5.2-3); classes de ductilidade A/B/C/D com ft/fy ≥ 1,05/1,08/1,15/1,25 e εuk ≥ 2,5/5/7,5/8 % (p. 183); εud = 0,9·εuk (Boletim 56, p. 25), ou seja **4,5 % para o B500B**. As classes CA-60 (≈ A) e CA-50 (≈ B) usam valores coerentes com os mínimos dessas classes, mas a NBR 7480 não foi conferida.
+- Bielas: fatores 1,00·ηfc / 0,75·ηfc / 0,55·ηfc (livro do CSFM, Tab. 2.1). O kε(ε1) da versão final do MC2010 **não** consta no Boletim 56 (só kc constante: 0,55·(30/fck)^(1/3), Eq. 7.3-24).
+
+**Eurocode 2 (só fonte secundária):** γc = 1,5, γs = 1,15 e αcc = 1,0 recomendado (faixa 0,8–1,0 nos anexos nacionais); a EN 1992-1-1 e o anexo a usar não foram vistos. εc2 e εcu2 e os fatores de biela vêm do livro do CSFM (conferidos). εud não conferido (a regra 0,9·εuk é do MC2010).
+
+**ACI 318:** conferidos só εcu = 3,0 ‰, φ = 0,75 e o ângulo mínimo de 25° entre bielas e tirantes (livro, p. 14). Fontes secundárias citam βs = 1,0/0,75 e βn = 0,80 (CCT)/0,60 (CTT), sem conferência primária: não implementados.
+
+**NBR 6118:** inalterada (γc = 1,4, αcc = 0,85, γs = 1,15, εc2 = 2 ‰, εcu = 3,5 ‰, εud = 10 ‰, biela de Borges). Pendentes: fatores fcd1/fcd2/fcd3 (ordem de fcd2 e fcd3 a conferir) e as propriedades das classes de aço (NBR 7480).

@@ -32,10 +32,11 @@ describe("perfis normativos (a norma é um dado)", () => {
   it("resistência de biela por norma: NBR pela fórmula de Borges; EC2 e MC2010 pelo fator do livro × fcd; ACI cai na NBR com aviso", () => {
     expect(strutDesignStrength(DESIGN_CODES.NBR6118, 30).sigma).toBeCloseTo(sigmaRdMax(30), 9);
     expect(strutDesignStrength(DESIGN_CODES.EC2, 30).sigma).toBeCloseTo(20, 9); // 1,00·30/1,5
-    expect(strutDesignStrength(DESIGN_CODES.MC2010, 50).sigma).toBeCloseTo(Math.cbrt(30 / 50) * 50 / 1.5, 9);
+    expect(strutDesignStrength(DESIGN_CODES.MC2010, 50).sigma).toBeCloseTo(Math.cbrt(30 / 50) * 0.85 * 50 / 1.5, 9); // αcc = 0,85 no MC2010
     const aci = strutDesignStrength(DESIGN_CODES.ACI318, 30);
     expect(aci.fallback).toBe(true); expect(aci.verified).toBe(false);
-    expect(strutDesignStrength(DESIGN_CODES.EC2, 30).verified).toBe(false); // γc e αcc ainda provisórios
+    expect(strutDesignStrength(DESIGN_CODES.EC2, 30).verified).toBe("sec"); // γc e αcc só em fonte secundária
+    expect(strutDesignStrength(DESIGN_CODES.MC2010, 30).verified).toBe(true); // γc = 1,5 e αcc ≥ 0,85 conferidos no MC2010
   });
   it("classes de aço por norma: B500B tem ft/fy = 1,08 e εu = 5 % (livro do CSFM, p. 22)", () => {
     expect(DESIGN_CODES.NBR6118.steelClasses).toEqual(["CA50", "CA60"]);
@@ -43,5 +44,13 @@ describe("perfis normativos (a norma é um dado)", () => {
     expect(DESIGN_CODES.ACI318.steelClasses).toEqual([]);
     const b = STEEL_CLASSES.B500B;
     expect(b.ft / b.fy).toBeCloseTo(1.08, 9); expect(b.epsU).toBe(0.05);
+  });
+  it("MC2010: valores conferidos nas fontes primárias (γc, γs, αcc ≥ 0,85, εud = 0,9·εuk, Es = 200 GPa)", () => {
+    const m = DESIGN_CODES.MC2010;
+    expect(m.gammaC).toBe(1.5); expect(m.gammaS).toBe(1.15); expect(m.alphaCc).toBe(0.85);
+    expect(m.epsUd).toBeCloseTo(0.9 * STEEL_CLASSES.B500B.epsU, 9); // 0,9·εuk
+    expect(STEEL_CLASSES.B500B.Es).toBe(200);
+    expect(Object.values(m.fields).every((v) => v === true)).toBe(true);
+    expect(fcdOfCode(m, 30)).toBeCloseTo(0.85 * 30 / 1.5, 9);
   });
 });

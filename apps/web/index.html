@@ -103,11 +103,12 @@
     .ntable th.act, .ntable td.act { box-shadow: inset 0 0 0 2px var(--brand); }
     .ntable td.v { background: #e8f5ec; color: #1b5e34; }
     .ntable td.p { background: var(--warn-bg); color: var(--warn); }
+    .ntable td.s { background: #e8f0fb; color: #1e3a6e; }
     .ntable td.n { color: var(--ink-mute); }
     .ntable button { margin-top: 3px; padding: 2px 6px; font-size: 11px; width: auto; }
     .ntable sup { font-size: 9px; }
     .tag { padding: 0 5px; border-radius: 3px; font-size: 11px; }
-    .tag.v { background: #e8f5ec; color: #1b5e34; } .tag.p { background: var(--warn-bg); color: var(--warn); }
+    .tag.v { background: #e8f5ec; color: #1b5e34; } .tag.p { background: var(--warn-bg); color: var(--warn); } .tag.s { background: #e8f0fb; color: #1e3a6e; }
     details.norma { margin-top: 6px; font-size: 11.5px; color: var(--ink-soft); }
     details.norma summary { cursor: pointer; font-weight: 600; color: var(--ink); }
     details.norma ul { margin: 3px 0 4px 16px; padding: 0; }
@@ -202,7 +203,7 @@
 
         <!-- ───────── Normas: comparação e navegação ───────── -->
         <section class="pane" data-pane="normas">
-          <small class="note intro">Compare as normas lado a lado para o fck do modelo e <b>escolha qual usar</b> (o seletor <b>Norma</b> do cabeçalho faz o mesmo). A norma ativa define fcd, εc2, εcu, a resistência das bielas (largura mínima da biela) e as classes de aço. Valores em <span class="tag v">verde</span> foram conferidos em fonte; em <span class="tag p">âmbar</span> são <b>provisórios</b>.</small>
+          <small class="note intro">Compare as normas lado a lado para o fck do modelo e <b>escolha qual usar</b> (o seletor <b>Norma</b> do cabeçalho faz o mesmo). A norma ativa define fcd, εc2, εcu, a resistência das bielas (largura mínima da biela) e as classes de aço. Valores em <span class="tag v">verde</span> foram conferidos em <b>fonte primária</b> (fib Model Code 2010 e livro do CSFM); em <span class="tag s">azul</span>, só em <b>fonte secundária</b>; em <span class="tag p">âmbar</span> são <b>provisórios</b>.</small>
           <div id="normasView"></div>
         </section>
 

@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { BAR_DIAMETERS, CODE_ORDER, DESIGN_CODES, STEEL_CLASSES, fcdOfCode, strutDesignStrength, barAreaCm2, buildProblem, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
+import { BAR_DIAMETERS, CODE_ORDER, DESIGN_CODES, STEEL_CLASSES, combine, fcdOfCode, strutDesignStrength, barAreaCm2, buildProblem, codeById, nearestFace, smartBarPath, tensionZones, CSFM_DEFAULTS, FCK_MIN, GAMMA_C, K_STRUT, SCENE_PRESETS, clampFck, filterRadiusForWidth, sigmaRdMax, strutWidth, isLineLoad, lineLoadIntensity, nearestEdgePoint, pointInPolygon, rectPts, sceneEdges, sceneVertices, supportFlags, supportKind } from "@stm/core";
 import type { CrushInfo, NlFailure, NlParams as NlParamsT, LoadSpec, NlBarResult, PrincipalField, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -1066,7 +1066,7 @@ $("biela").onclick = () => {
   const code = activeCode(), sd = strutDesignStrength(code, fck), sig = sd.sigma, a = Math.abs(F) / (scene.t * sig * 1000);
   const r = Math.min(12, Math.max(1.5, Math.ceil(filterRadiusForWidth(a, scene.h) * 2) / 2));
   $<HTMLInputElement>("rmin").value = String(r); $("rv").textContent = String(r);
-  $("bielaInfo").textContent = `Norma: ${code.short}${sd.verified ? "" : " (PROVISÓRIO)"}${sd.fallback ? " — sem fator de biela conferido, usando a fórmula da NBR" : ""} · F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa [${sd.formula}] · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
+  $("bielaInfo").textContent = `Norma: ${code.short}${sd.verified === true ? "" : sd.verified === "sec" ? " (fonte secundária)" : " (PROVISÓRIO)"}${sd.fallback ? " — sem fator de biela conferido, usando a fórmula da NBR" : ""} · F = ${F.toFixed(0)} kN (${origem}) · σRd,max = ${sig.toFixed(1)} MPa [${sd.formula}] · largura mínima a = ${(a * 100).toFixed(1)} cm → raio do filtro ${r} elem. (${(r * scene.h * 100).toFixed(1)} cm)` + (a / scene.h > 12 ? " — limitado a 12 elementos; refine a malha." : "");
 };
 
 const presetSel = $<HTMLSelectElement>("preset");
@@ -1206,11 +1206,14 @@ function updateMeshInfo() {
 }
 updateMeshInfo();
 
+const FIELD_NAMES: Record<string, string> = { gammaC: "γc", alphaCc: "αcc", epsC0: "εc2", epsCu: "εcu", gammaS: "γs", epsUd: "εud", strut: "fatores de biela", steel: "classes de aço" };
 function updateCodeStatus() {
   const c = codeById($<HTMLSelectElement>("nlCode").value), el = $("codeStatus");
-  const ok = c.id === "NBR6118";
-  el.className = ok ? "okbox" : "warnbox";
-  el.innerHTML = (ok ? "<b>NBR 6118: parâmetros conferidos.</b> " : `<b>${esc(c.name)}: PROVISÓRIO.</b> Só a NBR 6118 está conferida. `) + `Pendente: ${esc(c.status.pendente.join("; "))}.`;
+  const names = (v: boolean | "sec") => Object.entries(c.fields).filter(([, x]) => x === v).map(([k]) => FIELD_NAMES[k]);
+  const prov = names(false), sec = names("sec");
+  el.className = prov.length ? "warnbox" : "okbox";
+  el.innerHTML = `<b>${esc(c.name)}:</b> ` + (prov.length ? `PROVISÓRIO em ${esc(prov.join(", "))}. ` : "todos os parâmetros conferidos em fonte primária. ") +
+    (sec.length ? `Só em fonte secundária: ${esc(sec.join(", "))}. ` : "") + `Pendente: ${esc(c.status.pendente.join("; "))}.`;
 }
 $("nlCode").addEventListener("change", updateCodeStatus);
 updateCodeStatus();
@@ -1239,20 +1242,20 @@ function renderNormas() {
   const el = $("normasView");
   if (!el) return;
   const fck = clampFck(scene.fck ?? 30), act = activeCode().id;
-  type Cell = { t: string; ok?: boolean };
+  type Cell = { t: string; ok?: boolean | "sec" };
   const num = (v: number, d = 2) => v.toFixed(d).replace(".", ",");
   const rows: [string, (c: (typeof DESIGN_CODES)[keyof typeof DESIGN_CODES]) => Cell][] = [
     ["γc", (c) => ({ t: num(c.gammaC, 2), ok: c.fields.gammaC })],
     ["αcc", (c) => ({ t: num(c.alphaCc, 2), ok: c.fields.alphaCc })],
-    [`fcd (MPa) para fck = ${String(fck).replace(".", ",")}`, (c) => ({ t: num(fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc })],
+    [`fcd (MPa) para fck = ${String(fck).replace(".", ",")}`, (c) => ({ t: num(fcdOfCode(c, fck), 1), ok: combine(c.fields.gammaC, c.fields.alphaCc) })],
     ["εc2 (‰)", (c) => ({ t: num(c.epsC0 * 1000, 1), ok: c.fields.epsC0 })],
     ["εcu (‰)", (c) => ({ t: num(c.epsCu * 1000, 1), ok: c.fields.epsCu })],
     ["γs", (c) => ({ t: num(c.gammaS, 2), ok: c.fields.gammaS })],
     ["εud do aço (‰)", (c) => (c.epsUd == null ? { t: "não conferido" } : { t: num(c.epsUd * 1000, 1), ok: c.fields.epsUd })],
     ["Aço passivo", (c) => (c.steelClasses.length ? { t: c.steelClasses.map((k) => STEEL_CLASSES[k].label).join(", "), ok: c.fields.steel } : { t: "não conferido" })],
-    ["Biela comum σRd,máx (MPa)", (c) => { const d = strutDesignStrength(c, fck); return { t: num(d.sigma, 1) + (d.fallback ? " (fórmula NBR)" : ""), ok: d.verified && !d.fallback }; }],
-    ["Biela com tração transversal (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionNormal(fck) * fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc } : { t: "não conferido" })],
-    ["Biela com tração oblíqua (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionOblique(fck) * fcdOfCode(c, fck), 1), ok: c.fields.gammaC && c.fields.alphaCc } : { t: "não conferido" })],
+    ["Biela comum σRd,máx (MPa)", (c) => { const d = strutDesignStrength(c, fck); return { t: num(d.sigma, 1) + (d.fallback ? " (fórmula NBR)" : ""), ok: d.fallback ? false : d.verified }; }],
+    ["Biela com tração transversal (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionNormal(fck) * fcdOfCode(c, fck), 1), ok: combine(c.fields.gammaC, c.fields.alphaCc) } : { t: "não conferido" })],
+    ["Biela com tração oblíqua (MPa)", (c) => (c.strut ? { t: num(c.strut.tensionOblique(fck) * fcdOfCode(c, fck), 1), ok: combine(c.fields.gammaC, c.fields.alphaCc) } : { t: "não conferido" })],
     ["φ (bielas e tirantes)", (c) => (c.phi != null ? { t: num(c.phi, 2), ok: true } : { t: "—" })],
   ];
   let h = '<table class="ntable"><tr><th>Parâmetro</th>' + CODE_ORDER.map((id) => {
@@ -1262,8 +1265,8 @@ function renderNormas() {
   for (const [label, f] of rows) {
     h += `<tr><td>${esc(label)}</td>` + CODE_ORDER.map((id) => {
       const c = f(DESIGN_CODES[id]);
-      const cls = c.ok === undefined ? "n" : c.ok ? "v" : "p";
-      return `<td class="${cls} ${id === act ? "act" : ""}">${esc(c.t)}${c.ok === false ? "<sup> prov.</sup>" : ""}</td>`;
+      const cls = c.ok === undefined ? "n" : c.ok === true ? "v" : c.ok === "sec" ? "s" : "p";
+      return `<td class="${cls} ${id === act ? "act" : ""}">${esc(c.t)}${c.ok === false ? "<sup> prov.</sup>" : c.ok === "sec" ? "<sup> sec.</sup>" : ""}</td>`;
     }).join("") + "</tr>";
   }
   h += "</table>";
