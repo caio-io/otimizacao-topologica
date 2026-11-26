@@ -98,3 +98,21 @@ Lido: **Bulletin 56 vol. 2** (rascunho do MC2010) — cisalhamento 7.3.3 (PDF 49
 - Aço: Es = 200 GPa; diagrama bilinear idealizado (fyk, ftk, εuk); classes de ductilidade A (ft/fy ≥ 1,05; εuk ≥ 2,5 %), B (1,08; 5 %), C (1,15–1,35; 7,5 %), D (1,25–1,45; 8 %); Menegotto-Pinto para curvas reais.
 - Aderência (modelo local, 6.1-1 a 6.1-4): arrancamento `τbmax = 2,5·√fcm` (boa aderência) ou `1,25·√fcm`; s1 = 1,0 mm (2,0 / 3,6 mm), α = 0,4, τbf = 0,40·τbmax; trinca transversal reduz τ por `λ = 0,5·x/Ø ≤ 1` (6.1-7); escoamento do aço reduz por Ωy. Resistência de projeto: `fbd,0 = η1·η2·η3·η4·(fck/25)^0,5/γcb` com γcb = 1,5, η1 = 1,75 (nervurada), η2 = 1,0 (boa) ou 0,7, η3 = 1 (Ø ≤ 25 mm) ou (25/Ø)^0,3, η4 = 1,0 (fyk 500), 1,2 (400), 0,85 (600); `fbd = (α2+α3)·fbd,0 − 2·ptr` (6.1-21).
 - Não é o mesmo modelo de aderência do TCM do CSFM (τb0 = 2·fctm, τb1 = fctm); o livro do CSFM diz que o modelo τb–δ serve só à ancoragem no ELU.
+
+## Calibração — Queiroz & Leonel (2025): viga-parede 10 × 7 m com abertura em 9 posições
+Geometria lida da Fig. 6 (viga 10 × 7 m, t = 0,20 m, E = 28,567 GPa, ν = 0,15; 2 × 100 kN no topo em x = 3,5 e 6,5 m; apoios em x = 0,5 m (fixo) e 9,5 m (móvel); aberturas de 1,5 m em colunas x0 = 1,0 / 2,625 / 4,25 m e linhas y0 = 1,0 / 2,75 / 4,5 m; posições 1–3 na 1ª coluna de baixo para cima, 4–6 na 2ª, 7–9 na 3ª). SIMP a 30 %, malha 125 mm (4480 elementos Q4; o artigo usa 8672 T3), placas de 0,25 m no lugar de forças/apoios pontuais, rmin desconhecido no artigo (testados 2 e 3 elementos). Volume de aço: `∫σ1 dV / fyd` nas regiões tracionadas, fyd = 43,5 kN/cm² (`steelVolume` em `src/indices.ts`) — o artigo soma As·L dos tirantes de um modelo simplificado, então a comparação é de **variação relativa**, não do valor absoluto. Código: `test/calibracao.queiroz.test.ts` (`CALIBRACAO=1`).
+
+| Posição | Artigo | Aqui, rmin = 2 | Aqui, rmin = 3 |
+|---|---|---|---|
+| maciça (aço, cm³) | 888 | 814 | 814 |
+| 1 | +11,0 % | +3,7 % | +6,7 % |
+| 2 | +23,5 % | +10,4 % | +12,6 % |
+| 3 | +14,8 % | +7,2 % | +5,8 % |
+| 4 | 0 % | −0,1 % | −0,4 % |
+| 5 | +0,3 % | +0,4 % | −0,1 % |
+| 6 | +26,8 % | +10,2 % | +18,1 % |
+| 7, 8, 9 | 0 % | −0,1 % | −0,4 % |
+
+- **Conferem:** o conjunto de posições que não altera o aço (4, 5, 7, 8, 9, com variação < 0,5 %) e o conjunto das que alteram (1, 2, 3, 6). Com rmin = 3 as duas piores são as mesmas do artigo (6 e 2).
+- **Não conferem:** a magnitude é ≈ 40 % (rmin = 2) a 70 % (rmin = 3) da publicada; a ordem entre 1 e 3 troca com rmin = 3 (artigo: 3 > 1); com rmin = 2, 2 e 6 ficam empatadas (artigo: 6 > 2). O aço da peça maciça fica 8 % abaixo.
+- **Limites desta comparação:** o SIMP parou em 10–13 iterações para a peça maciça e nas posições sem efeito (tolerância 0,01), podendo estar pouco convergido; a métrica de aço é diferente da do artigo; placas no lugar de cargas pontuais; malha e filtro diferentes. Não varri a tolerância nem a malha.
