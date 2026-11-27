@@ -11,12 +11,17 @@ import { WorkflowSidebar } from "./components/WorkflowSidebar";
 import {
   DEFAULT_MODEL_ID,
   MODEL_CATALOG,
+  loadRecentProjects,
   loadSavedScene,
   maxNumericId,
+  parseProjectFile,
+  saveRecentProject,
   saveScene,
-  validateSceneObject,
+  serializeProjectFile,
 } from "./state/sceneStorage";
-import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, TabId, Tool, ViewMode, WorkerOut } from "./types/app";
+import type { ProjectFileV1, RecentProjectEntry } from "./state/sceneStorage";
+import { exportStmSvg } from "./canvas/renderer";
+import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, StmDisplayMode, TabId, Tool, ViewMode, WorkerOut } from "./types/app";
 
 export const App: React.FC = () => {
   const initialSaved = useMemo(() => loadSavedScene(), []);
@@ -46,6 +51,8 @@ export const App: React.FC = () => {
   const [csfm, setCsfm] = useState<CsfmSummary | null>(null);
   const [runningMode, setRunningMode] = useState<"opt" | "nl" | null>(null);
   const [stm, setStm] = useState<StmModel | null>(null);
+  const [stmDisplayMode, setStmDisplayMode] = useState<StmDisplayMode>("both");
+  const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>(() => loadRecentProjects());
   const [runningStm, setRunningStm] = useState(false);
   const [xiaMetrics, setXiaMetrics] = useState<{ steelVolCm3: number; xia: XiaIndices } | null>(null);
   const [computingXia, setComputingXia] = useState(false);
@@ -316,30 +323,59 @@ export const App: React.FC = () => {
   };
 
   const handleExportJson = () => {
-    const blob = new Blob([JSON.stringify(scene, null, 2)], { type: "application/json" });
+    const name = activeModel?.label ?? "Projeto STM";
+    const proj = serializeProjectFile({
+      name,
+      scene,
+      ui: { modelId, tab, viewMode, optMethod, volfrac, rmin, rminAuto },
+      results: stm ? { stm } : undefined,
+    });
+    setRecentProjects(saveRecentProject(proj));
+    const blob = new Blob([JSON.stringify(proj, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `stm-modelo-${modelId.replace(/[^a-z0-9-]/gi, "_")}.json`;
+    a.download = `stm-projeto-${modelId.replace(/[^a-z0-9-]/gi, "_")}.stm.json`;
     a.click();
     URL.revokeObjectURL(url);
+    showToast("Projeto salvo (.stm.json) e adicionado aos recentes.");
+  };
+
+  const applyProjectFile = (proj: ProjectFileV1) => {
+    clearResults();
+    saveScene(proj.scene);
+    setScene(proj.scene);
+    setModelId(proj.ui?.modelId && MODEL_CATALOG.some((m) => m.id === proj.ui?.modelId) ? proj.ui.modelId : "custom");
+    if (proj.ui?.tab) setTab(proj.ui.tab as TabId);
+    if (proj.ui?.viewMode) setViewMode(proj.ui.viewMode as ViewMode);
+    if (proj.ui?.optMethod) setOptMethod(proj.ui.optMethod);
+    if (typeof proj.ui?.volfrac === "number") setVolfrac(proj.ui.volfrac);
+    if (typeof proj.ui?.rmin === "number") setRmin(proj.ui.rmin);
+    if (typeof proj.ui?.rminAuto === "boolean") setRminAuto(proj.ui.rminAuto);
+    if (proj.results?.stm) setStm(proj.results.stm);
+    setSel(null);
+    idCounterRef.current = maxNumericId(proj.scene);
+    window.setTimeout(() => viewportRef.current?.fitView(), 30);
   };
 
   const handleImportJson = (text: string) => {
-    try {
-      const parsed = validateSceneObject(JSON.parse(text));
-      if (!parsed) { showToast("Arquivo JSON inválido ou com parâmetros fora dos limites físicos."); return; }
-      clearResults();
-      saveScene(parsed);
-      setScene(parsed);
-      setModelId("custom");
-      setSel(null);
-      idCounterRef.current = maxNumericId(parsed);
-      window.setTimeout(() => viewportRef.current?.fitView(), 30);
-      showToast("Modelo importado com sucesso.");
-    } catch {
-      showToast("Erro ao ler o arquivo JSON.");
-    }
+    const proj = parseProjectFile(text);
+    if (!proj) { showToast("Arquivo .stm.json / JSON inválido ou com parâmetros fora dos limites físicos."); return; }
+    applyProjectFile(proj);
+    setRecentProjects(saveRecentProject(proj));
+    showToast(`Projeto "${proj.name}" carregado com sucesso.`);
+  };
+
+  const handleExportStmSvg = () => {
+    const svg = exportStmSvg(scene, stm, stmDisplayMode);
+    const blob = new Blob([svg], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `stm-contornos-${modelId.replace(/[^a-z0-9-]/gi, "_")}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Desenho vetorial SVG exportado.");
   };
 
   return (
@@ -352,6 +388,11 @@ export const App: React.FC = () => {
         onOpenTemplates={() => setTemplatesOpen(true)}
         onExportJson={handleExportJson}
         onImportJson={handleImportJson}
+        recentProjects={recentProjects}
+        onLoadRecentProject={(entry) => {
+          applyProjectFile(entry.file);
+          showToast(`Projeto recente "${entry.name}" aberto.`);
+        }}
         onOpenReport={() => {
           setReportPng(viewportRef.current?.capturePng() ?? null);
           setReportOpen(true);
@@ -419,6 +460,9 @@ export const App: React.FC = () => {
             onShowMeshChange={setShowMesh}
             csfm={csfm}
             stm={stm}
+            stmDisplayMode={stmDisplayMode}
+            onStmDisplayModeChange={setStmDisplayMode}
+            onExportStmSvg={handleExportStmSvg}
             tool={tool}
             onToolChange={setTool}
             sel={sel}

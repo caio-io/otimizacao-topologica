@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barAreaCm2, base, faceEdges, nearestFace, smartBarPath } from "../src";
+import { arcFrom3Points, barAreaCm2, base, clipPolylineToSolid, discretizeBarPath, faceEdges, filletPolyline, generateStirrupGroup, nearestFace, parallelLayerOffset, smartBarPath, smartBarPaths } from "../src";
 import type { Scene } from "../src";
 
 const rect = (ccw = true): Scene => {
@@ -69,5 +69,69 @@ describe("armadura inteligente (offset do contorno)", () => {
     const p = smartBarPath(sc, { shape: 0, i: f.i }, { form: "reta", cover: 0.03, dia: 10, end: 0, legLen: 0.5 })!;
     close(p[0], 0.035, 0.035); close(p[1], 0.365, 0.035);
     expect(f.a[0]).toBeCloseTo(0, 6); expect(f.b[0]).toBeCloseTo(0.4, 6);
+  });
+
+  it("clipPolylineToSolid e generateStirrupGroup interrompem barras ao atravessar aberturas (cut)", () => {
+    const sc = base(0.05, 0.25);
+    sc.shapes.push({ id: "S1", mode: "add", pts: [[0, 0], [2, 0], [2, 1], [0, 1]] });
+    sc.shapes.push({ id: "A1", mode: "cut", pts: [[0.7, 0.3], [1.3, 0.3], [1.3, 0.7], [0.7, 0.7]] });
+
+    const clipped = clipPolylineToSolid(sc, [[0.05, 0.5], [1.95, 0.5]]);
+    expect(clipped).toHaveLength(2);
+    close(clipped[0][0], 0.05, 0.5); close(clipped[0][1], 0.7, 0.5);
+    close(clipped[1][0], 1.3, 0.5); close(clipped[1][1], 1.95, 0.5);
+
+    const grp = generateStirrupGroup({
+      id: "ST1",
+      x0: 0, y0: 0, x1: 2, y1: 1,
+      orientation: "vertical",
+      cover: 0.05,
+      spacing: 0.3,
+      legs: 2,
+      diaMm: 8,
+      steelClass: "CA50",
+      scene: sc,
+    })!;
+    expect(grp).not.toBeNull();
+    const allSegs = [grp.path, ...(grp.extra ?? [])];
+    // Estribo em x≈1.0 corta a abertura em y=[0.3, 0.7], gerando 2 trechos
+    const midSegs = allSegs.filter((seg) => Math.abs(seg[0][0] - 1.0) < 0.15);
+    expect(midSegs.length).toBeGreaterThanOrEqual(2);
+    for (const seg of allSegs) {
+      const ym = 0.5 * (seg[0][1] + seg[1][1]);
+      const xm = 0.5 * (seg[0][0] + seg[1][0]);
+      const insideHole = xm > 0.701 && xm < 1.299 && ym > 0.301 && ym < 0.699;
+      expect(insideHole).toBe(false);
+    }
+
+    const smartClip = smartBarPaths(sc, { shape: 0, i: 0 }, { form: "reta", cover: 0.03, dia: 10, end: 0, legLen: 0.4 });
+    expect(smartClip).toHaveLength(1);
+  });
+
+  it("parallelLayerOffset detecta barra paralela existente e propõe 2ª camada acima ou abaixo", () => {
+    const sc = rect();
+    const p1 = smartBarPath(sc, { shape: 0, i: 0 }, { ...o, form: "reta" })!;
+    sc.bars = [{ id: "B1", label: "Camada 1", path: p1, areaCm2: 1.57, fy: 435, ft: 470, Es: 210, epsU: 0.01 }];
+    const up = parallelLayerOffset(sc, { shape: 0, i: 0 }, { ...o, form: "reta" }, 1);
+    expect(up.layerIndex).toBe(1);
+    expect(up.provisional).toBe(true);
+    expect(up.effectiveCover).toBeCloseTo(0.03 + 0.02 + 0.01, 4); // cover + max(Ø, 20mm) + Ø
+    const down = parallelLayerOffset(sc, { shape: 0, i: 0 }, { ...o, form: "reta" }, -1);
+    expect(down.effectiveCover).toBeCloseTo(0.01, 4); // limitado ao mínimo 10 mm
+  });
+
+  it("arcFrom3Points e filletPolyline discretizam barras curvas respeitando flecha máxima", () => {
+    const arc = arcFrom3Points([0, 0], [0.5, 0.25], [1, 0], 0.005);
+    expect(arc.length).toBeGreaterThanOrEqual(5);
+    close(arc[0], 0, 0);
+    close(arc[arc.length - 1], 1, 0);
+    const mid = arc[Math.floor(arc.length / 2)];
+    expect(mid[1]).toBeGreaterThan(0.2);
+
+    const fil = filletPolyline([[0, 0], [1, 0], [1, 1]], 0.2, 0.01);
+    expect(fil.length).toBeGreaterThan(4);
+
+    const dPath = discretizeBarPath({ path: [[0, 0], [1, 0]], curve: { type: "arc", p1: [0, 0], p2: [0.5, 0.2], p3: [1, 0] } }, 0.08);
+    expect(dPath.length).toBeGreaterThanOrEqual(5);
   });
 });

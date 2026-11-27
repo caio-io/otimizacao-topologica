@@ -1,20 +1,23 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   STEEL_CLASSES,
+  arcFrom3Points,
   barAreaCm2,
   isLineLoad,
   nearestEdgePoint,
   nearestFace,
+  parallelLayerOffset,
   pointInPolygon,
   rectPts,
   sceneEdges,
-  smartBarPath,
+  smartBarPaths,
   supportFlags,
 } from "@stm/core";
 import type { LoadSpec, Scene, Shape, StmModel, SupportKind, SupportSpec } from "@stm/core";
 import {
   ArrowDown,
   ArrowDownToLine,
+  Download,
   Grid,
   Layers,
   Lock,
@@ -22,6 +25,7 @@ import {
   MousePointer2,
   Pentagon,
   RectangleHorizontal,
+  Spline,
   SquareDashed,
   Triangle,
   Unlock,
@@ -36,7 +40,7 @@ import {
   worldToScreenY,
 } from "../canvas/renderer";
 import type { ViewportTransform } from "../canvas/renderer";
-import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, Tool, ViewMode } from "../types/app";
+import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, StmDisplayMode, Tool, ViewMode } from "../types/app";
 
 export interface ViewportHandle {
   fitView: () => void;
@@ -56,6 +60,9 @@ interface ViewportCanvasProps {
   onShowMeshChange: (v: boolean) => void;
   csfm: CsfmSummary | null;
   stm: StmModel | null;
+  stmDisplayMode: StmDisplayMode;
+  onStmDisplayModeChange: (m: StmDisplayMode) => void;
+  onExportStmSvg: () => void;
   tool: Tool;
   onToolChange: (t: Tool) => void;
   sel: Selection;
@@ -130,13 +137,15 @@ const HINTS: Record<Tool, string> = {
   load: "Clique sobre uma face azul pontilhada para aplicar carga pontual",
   qload: "Clique (placa) ou arraste ao longo de uma face para carga distribuída",
   support: "Arraste ao longo de uma face para apoio distribuído (ou clique para pontual)",
-  rebar: "Aproxime de uma face para pré-visualizar a barra · Clique para criar · 1=Reta, 2=L, 3=U",
+  rebar: "Aproxime de uma face para pré-visualizar · Tab alterna camada acima/abaixo · Clique para criar",
+  arcbar: "Clique 3 pontos (início, meio e fim) para desenhar barra curva em arco · Esc cancela",
 };
 
 export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasProps>((props, ref) => {
   const {
     scene, onSceneChange, frame, frameIndex, frameCount, onFrameIndexChange,
     viewMode, onViewModeChange, showMesh, onShowMeshChange, csfm, stm,
+    stmDisplayMode, onStmDisplayModeChange, onExportStmSvg,
     tool, onToolChange, sel, onSelChange, geomLocked, onGeomLockedChange,
     supportKindDefault, rebarCfg, hoverBarId, onHoverBarChange, nextId, onToast,
     errors, warnings,
@@ -149,9 +158,11 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
   const dragRef = useRef<null | { type: string; start: [number, number]; cur: [number, number]; orig?: any }>(null);
   const panRef = useRef<null | { x: number; y: number }>(null);
   const polyDraftRef = useRef<[number, number][]>([]);
+  const arcDraftRef = useRef<[number, number][]>([]);
+  const layerDirRef = useRef<1 | -1>(1);
   const hoverWorldRef = useRef<[number, number]>([0, 0]);
   const hoverGripRef = useRef<[number, number] | null>(null);
-  const rebarPreviewRef = useRef<{ path: [number, number][]; a: [number, number]; b: [number, number] } | null>(null);
+  const rebarPreviewRef = useRef<{ path: [number, number][]; extra?: [number, number][][]; a: [number, number]; b: [number, number] } | null>(null);
 
   const [coords, setCoords] = useState<[number, number] | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; title?: string; lines: string[] } | null>(null);
@@ -170,11 +181,11 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     renderViewport({
-      ctx, width: w, height: h, view: viewRef.current, scene, frame, viewMode, showMesh, csfm, stm,
+      ctx, width: w, height: h, view: viewRef.current, scene, frame, viewMode, showMesh, csfm, stm, stmDisplayMode,
       sel, hoverBarId, tool, hoverGrip: hoverGripRef.current, rebarPreview: rebarPreviewRef.current,
-      rebarCfg, dragOverlay: dragRef.current, polyDraft: polyDraftRef.current, hoverWorld: hoverWorldRef.current,
+      rebarCfg, dragOverlay: dragRef.current, polyDraft: polyDraftRef.current, arcDraft: arcDraftRef.current, hoverWorld: hoverWorldRef.current,
     });
-  }, [scene, frame, viewMode, showMesh, csfm, stm, sel, hoverBarId, tool, rebarCfg]);
+  }, [scene, frame, viewMode, showMesh, csfm, stm, stmDisplayMode, sel, hoverBarId, tool, rebarCfg]);
 
   const fitView = useCallback(() => {
     const cv = cvRef.current;
@@ -283,9 +294,15 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     const onKey = (ev: KeyboardEvent) => {
       const tag = (ev.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (ev.key === "Tab" && tool === "rebar") {
+        ev.preventDefault();
+        layerDirRef.current = layerDirRef.current === 1 ? -1 : 1;
+        onToast(layerDirRef.current === 1 ? "Camada paralela: acima (para dentro do concreto)" : "Camada paralela: abaixo");
+      }
       if (ev.key === "Enter" && tool.startsWith("poly")) finishPoly();
       if (ev.key === "Escape") {
         polyDraftRef.current = [];
+        arcDraftRef.current = [];
         dragRef.current = null;
         rebarPreviewRef.current = null;
         onToolChange("select");
@@ -336,7 +353,7 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
       if (tool === "support" || tool === "qload") dragRef.current = { type: "support", start: [g.x, g.y], cur: [g.x, g.y] };
     } else if (geomLocked && (tool === "rect+" || tool === "poly+")) {
       onToast("Geometria principal travada.");
-    } else if (tool === "rebar") {
+    } else if (tool === "rebar" || tool === "arcbar") {
       /* criado no click */
     } else if (tool === "poly+" || tool === "poly-") {
       polyDraftRef.current.push(p);
@@ -365,10 +382,10 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     if (tool === "rebar") {
       const f = nearestFace(scene, wxm, wym, 42 / viewRef.current.s);
       if (f) {
-        const path = smartBarPath(scene, { shape: f.shape, i: f.i }, {
-          form: rebarCfg.form, cover: rebarCfg.cover, dia: rebarCfg.dia, end: f.t < 0.5 ? 0 : 1, legLen: rebarCfg.leg,
-        });
-        rebarPreviewRef.current = path ? { path, a: f.a, b: f.b } : null;
+        const opts = { form: rebarCfg.form, cover: rebarCfg.cover, dia: rebarCfg.dia, end: (f.t < 0.5 ? 0 : 1) as 0 | 1, legLen: rebarCfg.leg };
+        const layer = parallelLayerOffset(scene, { shape: f.shape, i: f.i }, opts, layerDirRef.current);
+        const paths = smartBarPaths(scene, { shape: f.shape, i: f.i }, { ...opts, cover: layer.effectiveCover });
+        rebarPreviewRef.current = paths.length > 0 ? { path: paths[0], extra: paths.length > 1 ? paths.slice(1) : undefined, a: f.a, b: f.b } : null;
       } else rebarPreviewRef.current = null;
     } else rebarPreviewRef.current = null;
 
@@ -501,6 +518,7 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
               id,
               label: `As${k} (${rebarCfg.n}Ø${String(rebarCfg.dia).replace(".", ",")})`,
               path: rp.path.map((q) => [...q] as [number, number]),
+              extra: rp.extra?.map((seg) => seg.map((q) => [...q] as [number, number])),
               areaCm2: barAreaCm2(rebarCfg.n, rebarCfg.dia),
               steelClass: rebarCfg.steel,
               fy: c.fy, ft: c.ft, Es: c.Es, epsU: c.epsU,
@@ -508,6 +526,40 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
           ],
         };
       }, true);
+      return;
+    }
+    if (tool === "arcbar") {
+      const [px, py] = evPos(ev);
+      const [wxm, wym] = screenToWorld(viewRef.current, px, py);
+      const pt: [number, number] = [snap(wxm), snap(wym)];
+      arcDraftRef.current.push(pt);
+      if (arcDraftRef.current.length >= 3) {
+        const [p1, p2, p3] = arcDraftRef.current;
+        arcDraftRef.current = [];
+        const pts = arcFrom3Points(p1, p2, p3, Math.max(0.002, scene.h / 8));
+        const id = nextId("B");
+        const c = STEEL_CLASSES[rebarCfg.steel];
+        onSceneChange((prev) => {
+          const k = (prev.bars?.length ?? 0) + 1;
+          return {
+            ...prev,
+            bars: [
+              ...(prev.bars ?? []),
+              {
+                id,
+                label: `As${k} Arco (${rebarCfg.n}Ø${String(rebarCfg.dia).replace(".", ",")})`,
+                path: pts,
+                curve: { type: "arc", p1, p2, p3 },
+                areaCm2: barAreaCm2(rebarCfg.n, rebarCfg.dia),
+                steelClass: rebarCfg.steel,
+                fy: c.fy, ft: c.ft, Es: c.Es, epsU: c.epsU,
+              },
+            ],
+          };
+        }, true);
+        onToast("Barra em arco adicionada.");
+      }
+      drawNow();
       return;
     }
     if (tool === "load") {
@@ -540,6 +592,7 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     { id: "qload", label: "Distribuída", icon: <ArrowDownToLine className="w-3.5 h-3.5" /> },
     { id: "support", label: "Apoio", icon: <Triangle className="w-3.5 h-3.5" /> },
     { id: "rebar", label: "Armadura", icon: <Grid className="w-3.5 h-3.5" /> },
+    { id: "arcbar", label: "Arco 3 pts", icon: <Spline className="w-3.5 h-3.5" /> },
   ];
 
   const legend = LEGENDS[viewMode];
@@ -634,6 +687,35 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
           />
           <span>Malha</span>
         </label>
+
+        {viewMode === "stm" && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">STM:</span>
+            {(["both", "axes", "contours"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => onStmDisplayModeChange(mode)}
+                className={`px-2 py-0.5 rounded border text-[11px] font-medium ${
+                  stmDisplayMode === mode
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-slate-600 border-slate-300 hover:bg-slate-100"
+                }`}
+              >
+                {mode === "both" ? "Ambos" : mode === "axes" ? "Eixos" : "Contornos"}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={onExportStmSvg}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-[11px] font-medium"
+              title="Exportar desenho vetorial SVG (contornos CAST + barras)"
+            >
+              <Download className="w-3 h-3" />
+              <span>SVG</span>
+            </button>
+          </div>
+        )}
 
         {frameCount > 1 && (
           <label className="flex items-center gap-2">

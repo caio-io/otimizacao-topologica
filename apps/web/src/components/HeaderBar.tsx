@@ -1,8 +1,9 @@
 import React, { useRef } from "react";
 import { CODE_ORDER, DESIGN_CODES, codeById } from "@stm/core";
 import type { DesignCodeId } from "@stm/core";
-import { BookOpen, Download, FileText, LayoutTemplate, Upload } from "lucide-react";
+import { BookOpen, Download, FileText, FolderOpen, LayoutTemplate, Save } from "lucide-react";
 import { MODEL_CATALOG } from "../state/sceneStorage";
+import type { RecentProjectEntry } from "../state/sceneStorage";
 
 interface HeaderBarProps {
   modelId: string;
@@ -12,6 +13,8 @@ interface HeaderBarProps {
   onOpenTemplates: () => void;
   onExportJson: () => void;
   onImportJson: (text: string) => void;
+  recentProjects: RecentProjectEntry[];
+  onLoadRecentProject: (entry: RecentProjectEntry) => void;
   onOpenReport: () => void;
 }
 
@@ -23,6 +26,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onOpenTemplates,
   onExportJson,
   onImportJson,
+  recentProjects,
+  onLoadRecentProject,
   onOpenReport,
 }) => {
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -118,19 +123,37 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           <span className="hidden md:inline">Templates</span>
         </button>
 
+        {recentProjects.length > 0 && (
+          <select
+            aria-label="Projetos recentes"
+            value=""
+            onChange={(e) => {
+              const entry = recentProjects.find((r) => r.id === e.target.value);
+              if (entry) onLoadRecentProject(entry);
+            }}
+            className="hidden lg:block bg-slate-800 text-slate-200 border border-slate-700 rounded-md px-2 py-1 text-xs max-w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            title="Abrir projeto salvo recentemente"
+          >
+            <option value="" disabled>Recentes ({recentProjects.length})</option>
+            {recentProjects.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        )}
+
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
           className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs transition-colors"
-          title="Importar cena JSON"
+          title="Abrir projeto (.stm.json ou .json)"
         >
-          <Upload className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Importar</span>
+          <FolderOpen className="w-3.5 h-3.5" />
+          <span className="hidden xl:inline">Abrir</span>
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept=".json,application/json"
+          accept=".stm.json,.json,application/json"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -144,10 +167,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           type="button"
           onClick={onExportJson}
           className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs transition-colors"
-          title="Exportar cena JSON"
+          title="Salvar projeto (.stm.json)"
         >
-          <Download className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">JSON</span>
+          <Save className="w-3.5 h-3.5" />
+          <span className="hidden xl:inline">Salvar</span>
         </button>
 
         <button

@@ -12,6 +12,7 @@ import {
   solveNonlinearSteps,
   steelVolume,
   supportReactions,
+  tendonsFromScene,
   xiaIndices,
 } from "@stm/core";
 import type { DesignCodeId, NlCurvePoint, NlStep, Scene, StmSteelClass } from "@stm/core";
@@ -97,6 +98,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
       gen = solveNonlinearSteps(problem, {
         concrete,
         bars: barsFromScene(d.scene),
+        tendons: tendonsFromScene(d.scene),
         origin: r.origin,
         checkCrushing: true,
         crushLength: par.crushLength || undefined,
@@ -171,7 +173,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
             warnings: first ? [...r.warnings, ...res.notes] : res.notes,
             nl: {
               lambda: res.lambda, mode: res.mode, epsComp: res.epsComp, epsTens: res.epsTens, crackTheta: res.crackTheta,
-              stress: res.stress, barSamples: res.barSamples, bars: res.bars, maxEpsC: res.maxCompStrain, crushStrain: res.crushStrain,
+              stress: res.stress, barSamples: res.barSamples, bars: res.bars, tendons: res.tendons, maxEpsC: res.maxCompStrain, crushStrain: res.crushStrain,
               crush: res.crush, failure: res.failure, firstPlateau: res.firstPlateau,
               epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: res.equilibrium,
               curve: res.curve, utilization: res.utilization,

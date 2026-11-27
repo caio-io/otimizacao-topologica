@@ -2,7 +2,7 @@ import type { BarSpec, Scene } from "./scene";
 import { rectPts } from "./scene";
 import { base, plateLoad } from "./presets";
 import { STEEL_CLASSES, type SteelClass } from "./nonlinear";
-import { barAreaCm2 } from "./rebar";
+import { barAreaCm2, clipPolylineToSolid } from "./rebar";
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
 
@@ -95,6 +95,8 @@ export interface StirrupGroupParams {
   /** diâmetro [mm] */
   diaMm: number;
   steelClass: SteelClass;
+  /** Cena opcional: quando informada, recorta estribos/barras nas aberturas (`cut`) */
+  scene?: Scene;
 }
 
 /** Gera um grupo de barras distribuídas (estribos ou malha) como `BarSpec` com `path` + `extra`. */
@@ -102,14 +104,14 @@ export function generateStirrupGroup(p: StirrupGroupParams): BarSpec | null {
   const xa = Math.min(p.x0, p.x1) + p.cover, xb = Math.max(p.x0, p.x1) - p.cover;
   const ya = Math.min(p.y0, p.y1) + p.cover, yb = Math.max(p.y0, p.y1) - p.cover;
   if (!(xb > xa + 1e-4) || !(yb > ya + 1e-4) || !(p.spacing > 1e-4) || !(p.legs >= 1)) return null;
-  const lines: [number, number][][] = [];
+  const rawLines: [number, number][][] = [];
   if (p.orientation === "vertical") {
     const span = xb - xa;
     const count = Math.max(1, Math.floor(span / p.spacing) + 1);
     const step = count > 1 ? span / (count - 1) : 0;
     for (let k = 0; k < count; k++) {
       const x = r4(xa + k * step);
-      lines.push([[x, r4(ya)], [x, r4(yb)]]);
+      rawLines.push([[x, r4(ya)], [x, r4(yb)]]);
     }
   } else {
     const span = yb - ya;
@@ -117,9 +119,13 @@ export function generateStirrupGroup(p: StirrupGroupParams): BarSpec | null {
     const step = count > 1 ? span / (count - 1) : 0;
     for (let k = 0; k < count; k++) {
       const y = r4(ya + k * step);
-      lines.push([[r4(xa), y], [r4(xb), y]]);
+      rawLines.push([[r4(xa), y], [r4(xb), y]]);
     }
   }
+  const lines = p.scene && p.scene.shapes.length > 0
+    ? rawLines.flatMap((ln) => clipPolylineToSolid(p.scene!, ln))
+    : rawLines;
+  if (lines.length === 0) return null;
   const st = STEEL_CLASSES[p.steelClass];
   const orientTxt = p.orientation === "vertical" ? "Estribos V" : "Distribuída H";
   return {

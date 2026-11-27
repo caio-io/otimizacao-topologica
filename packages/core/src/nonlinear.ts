@@ -2,6 +2,7 @@ import type { Problem } from "./types";
 import { buildModel, elementStiffness, solveBandedAssembled } from "./fe";
 import type { Scene } from "./scene";
 import { codeById, fcdOfCode } from "./codes";
+import { discretizeBarPath } from "./rebar";
 
 /**
  * Nível 2 do roteiro CSFM: análise não linear de peças planas de concreto com armadura 1D.
@@ -81,9 +82,30 @@ export interface Bar {
   more?: [number, number][][];
 }
 
+export interface Tendon {
+  path: [number, number][];
+  area: number;
+  P0: number;
+  steel: SteelLaw;
+  label?: string;
+}
+
+export interface NlTendonResult {
+  label: string;
+  P0: number;
+  P: number;
+  deltaP: number;
+  epsP: number;
+  sigmaMPa: number;
+  yielded: boolean;
+  provisional: true;
+}
+
 export interface NlOptions {
   concrete: ConcreteLaw;
   bars?: Bar[];
+  /** cabos de protensão não aderentes (Fase B1 PROVISÓRIO) */
+  tendons?: Tendon[];
   /** origem da malha na cena (BuildResult.origin); padrão (0,0) */
   origin?: { x: number; y: number };
   /** verifica |ε3| ≥ epsu no concreto como critério de ruptura (padrão: sim) */
@@ -190,6 +212,7 @@ export interface NlResult {
   mode: NlMode;
   u: Float64Array;
   bars: NlBarResult[];
+  tendons?: NlTendonResult[];
   /** maior encurtamento principal no concreto [‰ como fração] */
   maxCompStrain: number;
   /** equilíbrio global: |ΣR + ΣF| / |ΣF| em x e y */
@@ -384,6 +407,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const c = opt.concrete;
   const ts = opt.tensionStiffening;
   const bars = (opt.bars ?? []).map((b) => (ts ? { ...b, steel: withTensionStiffening(b.steel, ts.fct, ts.rhoEff) } : b));
+  const tendons = opt.tendons ?? [];
   const origin = opt.origin ?? { x: 0, y: 0 };
   const tol = opt.tol ?? 1e-4, maxIt = opt.maxIt ?? 150;
   const check = opt.checkCrushing ?? true;
@@ -453,6 +477,45 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
   });
 
+  // ---- cabos de protensão não aderentes (Fase B1 PROVISÓRIO): deformação média global ΔL/L0 + εp0
+  const tendonPieces: Piece[][] = tendons.map(() => []);
+  const tendonL0: number[] = tendons.map(() => 0);
+  tendons.forEach((td, k) => {
+    for (let q = 0; q + 1 < td.path.length; q++) {
+      const [xa, ya] = td.path[q], [xb, yb] = td.path[q + 1];
+      const L = Math.hypot(xb - xa, yb - ya);
+      if (L < 1e-9) continue;
+      const n = Math.max(1, Math.ceil(L / (h / 4))), len = L / n, cs = (xb - xa) / L, sn = (yb - ya) / L;
+      const m0 = cs * cs, m1 = sn * sn, m2 = cs * sn;
+      for (let r = 0; r < n; r++) {
+        const x = xa + ((r + 0.5) / n) * (xb - xa) - origin.x, y = ya + ((r + 0.5) / n) * (yb - ya) - origin.y;
+        const ie = Math.min(nelx - 1, Math.max(0, Math.floor(x / h))), jy = Math.min(nely - 1, Math.max(0, Math.floor(y / h)));
+        let iu = ie, ju = jy;
+        if (p.mask[ie * nely + (nely - 1 - jy)] === 0) {
+          let best = Infinity;
+          for (let di = -3; di <= 3; di++) for (let dj = -3; dj <= 3; dj++) {
+            const ci = ie + di, cj = jy + dj;
+            if (ci < 0 || cj < 0 || ci >= nelx || cj >= nely || p.mask[ci * nely + (nely - 1 - cj)] === 0) continue;
+            const dx = Math.max(ci * h - x, 0, x - (ci + 1) * h), dy = Math.max(cj * h - y, 0, y - (cj + 1) * h), d = dx * dx + dy * dy;
+            if (d < best) { best = d; iu = ci; ju = cj; }
+          }
+          if (best === Infinity) throw new Error(`cabo ${td.label ?? k}: trecho fora da geometria em (${(x + origin.x).toFixed(3)}, ${(y + origin.y).toFixed(3)})`);
+        }
+        const e = iu * nely + (nely - 1 - ju);
+        const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+        const xi = clamp(2 * (x - iu * h) / h - 1), eta = clamp(2 * (y - ju * h) / h - 1);
+        const g = new Float64Array(8);
+        for (let a = 0; a < 4; a++) {
+          const dnx = (XI[a] * (1 + ETA[a] * eta)) / (2 * h), dny = (ETA[a] * (1 + XI[a] * xi)) / (2 * h);
+          g[2 * a] = m0 * dnx + m2 * dny;
+          g[2 * a + 1] = m1 * dny + m2 * dnx;
+        }
+        tendonPieces[k].push({ e, g, len, bar: k, xm: x + origin.x, ym: y + origin.y });
+        tendonL0[k] += len;
+      }
+    }
+  });
+
   const notes: string[] = projected ? [`${projected} trechos de barra caíram em elementos vazios (malha grossa) e foram ligados ao elemento de concreto vizinho; refine a malha para mais precisão.`] : [];
 
   // posição de cada amostra de força, na mesma ordem em que `assemble` empilha as forças de cada barra
@@ -517,7 +580,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
   }
 
-  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; crackTh: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[]; singular: boolean }
+  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; crackTh: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[]; tendonState: { P: number; epsP: number; sigmaMPa: number; yielded: boolean }[]; singular: boolean }
 
   let maxEpsC = 0, epsEl = new Float64Array(0), epsT = new Float64Array(0), sEl = new Float64Array(0);
   let crCos = new Float64Array(0), crSin = new Float64Array(0);
@@ -738,9 +801,51 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       }
     }
     perBar.forEach((arr, k) => { barForces[k] = Float64Array.from(arr); });
+    // cabos não aderentes (Fase B1 PROVISÓRIO)
+    const tendonState: { P: number; epsP: number; sigmaMPa: number; yielded: boolean }[] = [];
+    for (let k = 0; k < tendons.length; k++) {
+      const td = tendons[k], st = td.steel, L0 = tendonL0[k];
+      if (L0 <= 1e-9 || td.area <= 0) {
+        tendonState.push({ P: td.P0, epsP: 0, sigmaMPa: 0, yielded: false });
+        continue;
+      }
+      const eps0 = td.P0 / (td.area * st.Es);
+      let dL = 0;
+      for (const pc of tendonPieces[k]) {
+        const b0 = pc.e * 8;
+        let eps = 0;
+        for (let a = 0; a < 8; a++) eps += pc.g[a] * u[edof[b0 + a]];
+        dL += eps * pc.len;
+      }
+      const epsP = eps0 + dL / L0;
+      const sg = epsP > 0 ? steelSigma(st, epsP) : 0; // cabo não resiste à compressão
+      const Np = td.area * sg;
+      const Et = epsP > 0 ? (useTan ? steelTangent(st, epsP) : Math.max(sg / epsP, 1e-3 * st.Es)) : 1e-6 * st.Es;
+      // Pré-condicionador SPD local equivalente (mantém largura de banda da malha; o resíduo `fint` usa o Np exato não aderente)
+      const kBase = td.area * Et;
+      for (const pc of tendonPieces[k]) {
+        const b0 = pc.e * 8, kk = kBase * pc.len;
+        for (let a = 0; a < 8; a++) {
+          const i = edof[b0 + a];
+          fint[i] += Np * pc.len * pc.g[a];
+          if (!needK || fixedEff[i]) continue;
+          for (let q = 0; q < 8; q++) {
+            const j = edof[b0 + q];
+            if (j > i || fixedEff[j]) continue;
+            L[i * w + (bw - (i - j))] += kk * pc.g[a] * pc.g[q];
+          }
+        }
+      }
+      tendonState.push({
+        P: Np,
+        epsP,
+        sigmaMPa: sg / 1000,
+        yielded: epsP >= st.fy / st.Es,
+      });
+    }
     const crackTh = new Float64Array(nelx * nely);
     for (let e = 0; e < nelx * nely; e++) if (epsT[e] > 0) crackTh[e] = 0.5 * Math.atan2(crSin[e], crCos[e]);
-    return { L, fint, maxEpsC, epsEl, epsT, crackTh, sEl, barForces, barEps, yielded, singular };
+    return { L, fint, maxEpsC, epsEl, epsT, crackTh, sEl, barForces, barEps, yielded, tendonState, singular };
   };
 
   // ---- equilíbrio em um nível de carga: correção pelo resíduo com rigidez secante
@@ -922,6 +1027,21 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       bar: mode === "FR" && failBarK >= 0 ? { label: bars[failBarK].label ?? `B${failBarK + 1}`, at: barMaxAt(failBarK) } : null,
     },
     work: { iterations: steps.reduce((a, s) => a + s.its, 0), lineSearchTrials: lsTrials },
+    tendons: tendons.length > 0
+      ? tendons.map((td, k) => {
+          const st = asmGood.tendonState[k];
+          return {
+            label: td.label ?? `CP${k + 1}`,
+            P0: td.P0,
+            P: st.P,
+            deltaP: st.P - td.P0,
+            epsP: st.epsP,
+            sigmaMPa: st.sigmaMPa,
+            yielded: st.yielded,
+            provisional: true as const,
+          };
+        })
+      : undefined,
   };
 }
 
@@ -949,8 +1069,27 @@ export function barsFromScene(s: Scene): Bar[] {
     if (fy / Es >= b.epsU)
       throw new Error(`barra ${tag}: deformação de escoamento fy/Es (${(fy / Es * 1000).toFixed(2)} ‰) deve ser menor que εu (${(b.epsU * 1000).toFixed(2)} ‰)`);
     return {
-      x0: 0, y0: 0, x1: 0, y1: 0, path: b.path, more: b.extra, area: b.areaCm2 * 1e-4, label: b.label,
+      x0: 0, y0: 0, x1: 0, y1: 0, path: discretizeBarPath(b, s.h), more: b.extra, area: b.areaCm2 * 1e-4, label: b.label,
       steel: { fy, ft, Es, epsU: b.epsU },
+    };
+  });
+}
+
+/** Converte cabos de protensão não aderentes da cena (`TendonSpec`) para unidades do solver (`Tendon`). */
+export function tendonsFromScene(s: Scene): Tendon[] {
+  return (s.tendons ?? []).map((td, k) => {
+    const tag = td.label || `CP${k + 1}`;
+    const ok = (v: number) => Number.isFinite(v) && v > 0;
+    if (!ok(td.areaCm2) || !ok(td.fpy) || !ok(td.fpu) || !ok(td.Ep) || !ok(td.epsU) || !Number.isFinite(td.P0) || td.P0 < 0)
+      throw new Error(`cabo ${tag}: parâmetros inválidos`);
+    if (td.fpu < td.fpy)
+      throw new Error(`cabo ${tag}: fpu (${td.fpu} MPa) não pode ser menor que fpy (${td.fpy} MPa)`);
+    return {
+      path: discretizeBarPath({ path: td.path, curve: td.curve }, s.h),
+      area: td.areaCm2 * 1e-4,
+      P0: td.P0,
+      steel: { fy: td.fpy * 1e3, ft: td.fpu * 1e3, Es: td.Ep * 1e6, epsU: td.epsU },
+      label: td.label,
     };
   });
 }

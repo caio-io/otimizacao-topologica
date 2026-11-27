@@ -1,14 +1,17 @@
 import {
   STEEL_CLASSES,
+  arcFrom3Points,
   barAreaCm2,
+  discretizeBarPath,
   isLineLoad,
   lineLoadIntensity,
+  sceneBounds,
   sceneEdges,
   sceneVertices,
   supportKind,
 } from "@stm/core";
 import type { LoadSpec, Scene, StmModel, SupportSpec } from "@stm/core";
-import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, Tool, ViewMode } from "../types/app";
+import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, StmDisplayMode, Tool, ViewMode } from "../types/app";
 
 export interface ViewportTransform {
   s: number;  // px / m
@@ -327,13 +330,15 @@ function drawResult(
 
 function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Scene, frame: FrameMsg | null, hoverBarId: string | null) {
   const bars = scene.bars ?? [];
-  if (!bars.length) return;
+  const tendons = scene.tendons ?? [];
+  if (!bars.length && !tendons.length) return;
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   bars.forEach((b, k) => {
     const hl = hoverBarId === b.id;
-    const allPaths = [b.path, ...(b.extra ?? [])];
+    const mainPath = discretizeBarPath(b, scene.h);
+    const allPaths = [mainPath, ...(b.extra ?? [])];
     ctx.strokeStyle = hl ? "#2563eb" : frame?.nl ? "rgba(30,41,59,.45)" : "#991b1b";
     ctx.lineWidth = hl ? 3.5 : frame?.nl ? 1.1 : Math.max(1.5, Math.min(3.8, Math.sqrt(b.areaCm2)));
     for (const path of allPaths) {
@@ -371,6 +376,33 @@ function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Sc
       ctx.fill();
     }
   });
+
+  // Cabos de protensão não aderentes (Fase B1 PROVISÓRIO)
+  for (const td of tendons) {
+    const pts = discretizeBarPath({ path: td.path, curve: td.curve }, scene.h);
+    if (pts.length < 2) continue;
+    ctx.setLineDash([10, 4, 2, 4]);
+    ctx.strokeStyle = "#7c3aed";
+    ctx.lineWidth = Math.max(2.2, Math.min(4.2, Math.sqrt(td.areaCm2) * 1.4));
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(v, x), worldToScreenY(v, y)) : ctx.moveTo(worldToScreenX(v, x), worldToScreenY(v, y))));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Ancoragens nas extremidades
+    ctx.fillStyle = "#5b21b6";
+    for (const endPt of [pts[0], pts[pts.length - 1]]) {
+      ctx.fillRect(worldToScreenX(v, endPt[0]) - 4, worldToScreenY(v, endPt[1]) - 4, 8, 8);
+    }
+    const mid = pts[Math.floor(pts.length / 2)];
+    const lx = worldToScreenX(v, mid[0]), ly = worldToScreenY(v, mid[1]);
+    const lbl = `${td.label} (P0=${td.P0.toFixed(0)} kN · PROVISÓRIO)`;
+    ctx.font = "700 10px Inter, system-ui, sans-serif";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,.92)";
+    ctx.strokeText(lbl, lx + 6, ly - 6);
+    ctx.fillStyle = "#6d28d9";
+    ctx.fillText(lbl, lx + 6, ly - 6);
+  }
   ctx.restore();
 }
 
@@ -474,41 +506,84 @@ function drawReactions(ctx: CanvasRenderingContext2D, v: ViewportTransform, m: F
   ctx.restore();
 }
 
-function drawStm(ctx: CanvasRenderingContext2D, v: ViewportTransform, stm: StmModel) {
+function drawStm(ctx: CanvasRenderingContext2D, v: ViewportTransform, stm: StmModel, displayMode: StmDisplayMode = "both") {
   if (!stm.nodes.length || !stm.members.length) return;
   const nodeMap = new Map(stm.nodes.map((n) => [n.id, n]));
   const maxN = Math.max(1e-6, ...stm.members.map((m) => Math.abs(m.N)));
   ctx.save();
   ctx.lineCap = "round";
 
-  for (const m of stm.members) {
-    const a = nodeMap.get(m.n1);
-    const b = nodeMap.get(m.n2);
-    if (!a || !b) continue;
-    const x0 = worldToScreenX(v, a.x), y0 = worldToScreenY(v, a.y);
-    const x1 = worldToScreenX(v, b.x), y1 = worldToScreenY(v, b.y);
-    const lw = 2 + 5.5 * (Math.abs(m.N) / maxN);
+  // Contornos estilo CAST (bielas prismáticas/garrafa e zonas nodais)
+  if (displayMode !== "axes" && stm.geometry) {
+    for (const sc of stm.geometry.struts) {
+      if (sc.pts.length < 3) continue;
+      ctx.beginPath();
+      sc.pts.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(v, x), worldToScreenY(v, y)) : ctx.moveTo(worldToScreenX(v, x), worldToScreenY(v, y))));
+      ctx.closePath();
+      ctx.fillStyle = sc.ok ? "rgba(37, 99, 235, 0.16)" : "rgba(220, 38, 38, 0.20)";
+      ctx.fill();
+      ctx.setLineDash(sc.provisional ? [5, 3] : []);
+      ctx.strokeStyle = sc.ok ? "rgba(29, 78, 216, 0.65)" : "rgba(185, 28, 28, 0.85)";
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const nc of stm.geometry.nodes) {
+      if (nc.pts.length < 3) continue;
+      ctx.beginPath();
+      nc.pts.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(v, x), worldToScreenY(v, y)) : ctx.moveTo(worldToScreenX(v, x), worldToScreenY(v, y))));
+      ctx.closePath();
+      ctx.fillStyle = nc.ok ? "rgba(22, 163, 74, 0.26)" : "rgba(220, 38, 38, 0.28)";
+      ctx.fill();
+      ctx.strokeStyle = nc.ok ? "#15803d" : "#b91c1c";
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+  }
 
-    if (m.kind === "strut") {
-      ctx.setLineDash([7, 4]);
-      ctx.strokeStyle = m.ok ? "#1d4ed8" : "#b91c1c";
-      ctx.lineWidth = lw;
-      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-      ctx.setLineDash([]);
-    } else {
-      ctx.setLineDash([]);
+  if (displayMode !== "contours") {
+    for (const m of stm.members) {
+      const a = nodeMap.get(m.n1);
+      const b = nodeMap.get(m.n2);
+      if (!a || !b) continue;
+      const x0 = worldToScreenX(v, a.x), y0 = worldToScreenY(v, a.y);
+      const x1 = worldToScreenX(v, b.x), y1 = worldToScreenY(v, b.y);
+      const lw = 2 + 5.5 * (Math.abs(m.N) / maxN);
+
+      if (m.kind === "strut") {
+        ctx.setLineDash([7, 4]);
+        ctx.strokeStyle = m.ok ? "#1d4ed8" : "#b91c1c";
+        ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "#dc2626";
+        ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+
+        const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+        const lbl = `T = ${m.N.toFixed(0)} kN · As = ${m.AsReqCm2.toFixed(1)} cm²`;
+        ctx.font = "700 11px Inter, system-ui, sans-serif";
+        const tw = ctx.measureText(lbl).width;
+        ctx.fillStyle = "rgba(255,255,255,.92)";
+        ctx.fillRect(mx - tw / 2 - 4, my - 19, tw + 8, 16);
+        ctx.fillStyle = "#991b1b";
+        ctx.fillText(lbl, mx - tw / 2, my - 7);
+      }
+    }
+  } else {
+    // No modo apenas Contornos, ainda desenha os tirantes em vermelho para fechar o equilíbrio visual
+    for (const m of stm.members) {
+      if (m.kind !== "tie") continue;
+      const a = nodeMap.get(m.n1), b = nodeMap.get(m.n2);
+      if (!a || !b) continue;
       ctx.strokeStyle = "#dc2626";
-      ctx.lineWidth = lw;
-      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-
-      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-      const lbl = `T = ${m.N.toFixed(0)} kN · As = ${m.AsReqCm2.toFixed(1)} cm²`;
-      ctx.font = "700 11px Inter, system-ui, sans-serif";
-      const tw = ctx.measureText(lbl).width;
-      ctx.fillStyle = "rgba(255,255,255,.92)";
-      ctx.fillRect(mx - tw / 2 - 4, my - 19, tw + 8, 16);
-      ctx.fillStyle = "#991b1b";
-      ctx.fillText(lbl, mx - tw / 2, my - 7);
+      ctx.lineWidth = 2 + 4 * (Math.abs(m.N) / maxN);
+      ctx.beginPath();
+      ctx.moveTo(worldToScreenX(v, a.x), worldToScreenY(v, a.y));
+      ctx.lineTo(worldToScreenX(v, b.x), worldToScreenY(v, b.y));
+      ctx.stroke();
     }
   }
 
@@ -550,6 +625,7 @@ export interface RenderCanvasArgs {
   showMesh: boolean;
   csfm: CsfmSummary | null;
   stm: StmModel | null;
+  stmDisplayMode?: StmDisplayMode;
   sel: Selection;
   hoverBarId: string | null;
   tool: Tool;
@@ -558,11 +634,12 @@ export interface RenderCanvasArgs {
   rebarCfg: RebarToolConfig;
   dragOverlay: { type: string; start: [number, number]; cur: [number, number] } | null;
   polyDraft: [number, number][];
+  arcDraft?: [number, number][];
   hoverWorld: [number, number];
 }
 
 export function renderViewport(args: RenderCanvasArgs) {
-  const { ctx, width, height, view, scene, frame, viewMode, showMesh, csfm, stm, sel, hoverBarId, tool, hoverGrip, rebarPreview, rebarCfg, dragOverlay, polyDraft, hoverWorld } = args;
+  const { ctx, width, height, view, scene, frame, viewMode, showMesh, csfm, stm, stmDisplayMode = "both", sel, hoverBarId, tool, hoverGrip, rebarPreview, rebarCfg, dragOverlay, polyDraft, arcDraft, hoverWorld } = args;
   ctx.clearRect(0, 0, width, height);
   drawGrid(ctx, view, width, height);
 
@@ -592,7 +669,7 @@ export function renderViewport(args: RenderCanvasArgs) {
     }
   }
 
-  if (viewMode === "stm" && stm) drawStm(ctx, view, stm);
+  if (viewMode === "stm" && stm) drawStm(ctx, view, stm, stmDisplayMode);
   drawBars(ctx, view, scene, frame, hoverBarId);
   for (const sp of scene.supports) drawSupport(ctx, view, scene, sp, sel?.kind === "support" && sel.id === sp.id);
   for (const ld of scene.loads) drawLoad(ctx, view, scene, ld, sel?.kind === "load" && sel.id === ld.id);
@@ -643,6 +720,26 @@ export function renderViewport(args: RenderCanvasArgs) {
     const ty = Math.max(18, Math.min(height - 8, worldToScreenY(view, mid[1]) - 14));
     ctx.fillStyle = "rgba(255,255,255,.94)"; ctx.fillRect(tx - 5, ty - 13, tw + 10, 18);
     ctx.fillStyle = "#14532d"; ctx.fillText(txt, tx, ty);
+    ctx.restore();
+  }
+
+  // pré-visualização da barra em arco (3 pontos)
+  if (tool === "arcbar" && arcDraft && arcDraft.length > 0) {
+    ctx.save();
+    const pts = arcDraft.length === 2
+      ? arcFrom3Points(arcDraft[0], arcDraft[1], hoverWorld, Math.max(0.002, scene.h / 8))
+      : [arcDraft[0], hoverWorld];
+    ctx.strokeStyle = "#0f766e";
+    ctx.lineWidth = Math.max(2.2, (rebarCfg.dia / 1000) * view.s);
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(view, x), worldToScreenY(view, y)) : ctx.moveTo(worldToScreenX(view, x), worldToScreenY(view, y))));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#0f766e";
+    for (const [x, y] of arcDraft) {
+      ctx.beginPath(); ctx.arc(worldToScreenX(view, x), worldToScreenY(view, y), 4, 0, Math.PI * 2); ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -824,4 +921,59 @@ export function inspectHoverPoint(
       `Direção σ1 = ${((frame.field.theta[e] * 180) / Math.PI).toFixed(0)}°${frame.elastic ? "" : ` · ρ = ${frame.rho[e].toFixed(2)}`}`,
     ],
   };
+}
+
+/** Gera SVG vetorial da geometria, contornos/eixos STM estilo CAST e armaduras/cabos. */
+export function exportStmSvg(scene: Scene, stm: StmModel | null, displayMode: StmDisplayMode = "both"): string {
+  const b = sceneBounds(scene) ?? { x0: 0, y0: 0, x1: 1, y1: 1 };
+  const pad = Math.max(0.15, 0.1 * Math.max(b.x1 - b.x0, b.y1 - b.y0));
+  const vx0 = b.x0 - pad, vy0 = b.y0 - pad, vw = (b.x1 - b.x0) + 2 * pad, vh = (b.y1 - b.y0) + 2 * pad;
+  const W = 1000, H = Math.max(300, Math.round((W * vh) / vw));
+  const sx = (x: number) => (((x - vx0) / vw) * W).toFixed(2);
+  const sy = (y: number) => (H - ((y - vy0) / vh) * H).toFixed(2);
+  const poly = (pts: readonly [number, number][]) => pts.map(([x, y]) => `${sx(x)},${sy(y)}`).join(" ");
+  const lines: string[] = [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`,
+    `<rect width="${W}" height="${H}" fill="#ffffff"/>`,
+  ];
+  for (const s of scene.shapes) {
+    lines.push(
+      `<polygon points="${poly(s.pts)}" fill="${s.mode === "add" ? "#e2e8f0" : "#ffffff"}" stroke="#475569" stroke-width="1.5"${s.mode === "cut" ? ' stroke-dasharray="6,4"' : ""}/>`,
+    );
+  }
+  if (stm) {
+    const nm = new Map(stm.nodes.map((n) => [n.id, n]));
+    if (displayMode !== "axes" && stm.geometry) {
+      for (const sc of stm.geometry.struts) {
+        lines.push(
+          `<polygon points="${poly(sc.pts)}" fill="${sc.ok ? "rgba(37,99,235,0.16)" : "rgba(220,38,38,0.20)"}" stroke="${sc.ok ? "#1d4ed8" : "#b91c1c"}" stroke-width="1.3"${sc.provisional ? ' stroke-dasharray="5,3"' : ""}/>`,
+        );
+      }
+      for (const nc of stm.geometry.nodes) {
+        lines.push(
+          `<polygon points="${poly(nc.pts)}" fill="${nc.ok ? "rgba(22,163,74,0.26)" : "rgba(220,38,38,0.28)"}" stroke="${nc.ok ? "#15803d" : "#b91c1c"}" stroke-width="1.5"/>`,
+        );
+      }
+    }
+    if (displayMode !== "contours") {
+      for (const m of stm.members) {
+        const a = nm.get(m.n1), c = nm.get(m.n2);
+        if (!a || !c) continue;
+        lines.push(
+          `<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(c.x)}" y2="${sy(c.y)}" stroke="${m.kind === "tie" ? "#dc2626" : m.ok ? "#1d4ed8" : "#b91c1c"}" stroke-width="3"${m.kind === "strut" ? ' stroke-dasharray="7,4"' : ""}/>`,
+        );
+      }
+    }
+  }
+  for (const br of scene.bars ?? []) {
+    const pts = discretizeBarPath(br, scene.h);
+    lines.push(`<polyline points="${poly(pts)}" fill="none" stroke="#991b1b" stroke-width="2"/>`);
+  }
+  for (const td of scene.tendons ?? []) {
+    const pts = discretizeBarPath({ path: td.path, curve: td.curve }, scene.h);
+    lines.push(`<polyline points="${poly(pts)}" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="10,4,2,4"/>`);
+  }
+  lines.push(`</svg>`);
+  return lines.join("\n");
 }

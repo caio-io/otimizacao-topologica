@@ -198,4 +198,24 @@ describe("Nível 2 — análise não linear (concreto sem tração + barras, ade
     expect(t2.bars[0].yieldLambda!).toBeLessThan(t2.lambda);
     expect(t2.bars[0].maxAt).not.toBeNull();
   }, 120_000);
+
+  it("T8 protensão não aderente (Fase B1 PROVISÓRIO): cabo pós-tensionado aumenta P com ΔL/L0 e atinge fpu·Ap", () => {
+    const nelx = 10, nely = 2, h = 0.05;
+    const p = block(nelx, nely, h);
+    for (let j = 0; j <= nely; j++) p.fixed.push(2 * (0 * (nely + 1) + j), 2 * (0 * (nely + 1) + j) + 1);
+    p.loads.push({ node: nelx * (nely + 1) + 1, fx: 1, fy: 0 });
+    const area = 2e-4; // 2.0 cm²
+    const P0 = 50; // kN
+    const cp190 = { fy: 1710e3, ft: 1900e3, Es: 195e6, epsU: 0.035 };
+    const r = solveNonlinear(p, {
+      concrete: nbrConcrete(35),
+      tendons: [{ path: [[0, 0.05], [0.5, 0.05]], area, P0, steel: cp190, label: "Cabo 1" }],
+      dLambda: 50,
+    });
+    expect(r.tendons).toHaveLength(1);
+    expect(r.tendons![0].provisional).toBe(true);
+    expect(r.tendons![0].P).toBeGreaterThan(P0);
+    expect(r.lambda).toBeGreaterThan(P0);
+    expect(r.equilibrium.x).toBeLessThan(1e-2);
+  });
 });

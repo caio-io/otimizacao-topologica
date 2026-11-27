@@ -196,6 +196,7 @@ export const WorkflowSidebar: React.FC<WorkflowSidebarProps> = (props) => {
       legs: Math.max(1, Math.round(stLegs)),
       diaMm: stDia,
       steelClass: steelChoice,
+      scene,
     });
     if (!grp) { onToast("Região muito pequena para o cobrimento/espaçamento informado."); return; }
     onSceneChange((prev) => ({ ...prev, bars: [...(prev.bars ?? []), grp] }), true);
@@ -892,6 +893,116 @@ export const WorkflowSidebar: React.FC<WorkflowSidebarProps> = (props) => {
                   ))}
                 </div>
               )}
+            </section>
+
+            {/* Cabos de Protensão Não Aderentes (Fase B1 PROVISÓRIO) */}
+            <section className="space-y-2 pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-[10.5px] font-bold uppercase tracking-wider text-purple-700">
+                  Protensão Não Aderente ({scene.tendons?.length ?? 0})
+                </h2>
+                <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-300">
+                  PROVISÓRIO · Fase B1
+                </span>
+              </div>
+              <p className="text-[10.5px] text-slate-500">
+                Cordoalha não aderente (ΔL/L0 global + εp0). Ainda sem perdas por atrito, encunhamento ou relaxação.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  const b = sceneBounds(scene);
+                  if (!b) { onToast("Defina a geometria antes de adicionar cabo."); return; }
+                  const ym = Math.round((b.y0 + 0.15 * (b.y1 - b.y0)) * 1000) / 1000;
+                  const id = nextId("CP");
+                  const idx = (scene.tendons?.length ?? 0) + 1;
+                  onSceneChange((p) => ({
+                    ...p,
+                    tendons: [
+                      ...(p.tendons ?? []),
+                      {
+                        id,
+                        label: `Cabo ${idx} (CP190)`,
+                        path: [[b.x0 + 0.02, ym], [b.x1 - 0.02, ym]],
+                        areaCm2: 2.0,
+                        P0: 150,
+                        Ep: 195,
+                        fpy: 1710,
+                        fpu: 1900,
+                        epsU: 0.035,
+                        unbonded: true,
+                      },
+                    ],
+                  }), true);
+                  onToast(`Cabo ${idx} adicionado.`);
+                }}
+                className="w-full py-1.5 px-2.5 rounded-md border border-purple-300 bg-purple-50 hover:bg-purple-100 text-purple-800 font-medium text-xs transition-colors"
+              >
+                + Adicionar cabo não aderente
+              </button>
+              {(scene.tendons ?? []).map((td) => (
+                <div key={td.id} className="p-2 rounded-lg border border-purple-200 bg-purple-50/30 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-semibold text-purple-900 truncate">{td.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => onSceneChange((p) => ({ ...p, tendons: (p.tendons ?? []).filter((q) => q.id !== td.id) }), true)}
+                      className="p-0.5 text-slate-400 hover:text-red-600"
+                      title="Remover cabo"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+                    <label className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500">Ap (cm²)</span>
+                      <input
+                        type="number" step="0.1" min="0.1" value={td.areaCm2}
+                        onChange={(e) => {
+                          const v = +e.target.value;
+                          if (v > 0) onSceneChange((p) => ({ ...p, tendons: (p.tendons ?? []).map((q) => q.id === td.id ? { ...q, areaCm2: v } : q) }), true);
+                        }}
+                        className="w-full px-1.5 py-0.5 border border-slate-300 rounded font-mono-tech bg-white"
+                      />
+                    </label>
+                    <label className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500">P0 (kN)</span>
+                      <input
+                        type="number" step="10" min="0" value={td.P0}
+                        onChange={(e) => {
+                          const v = +e.target.value;
+                          if (v >= 0) onSceneChange((p) => ({ ...p, tendons: (p.tendons ?? []).map((q) => q.id === td.id ? { ...q, P0: v } : q) }), true);
+                        }}
+                        className="w-full px-1.5 py-0.5 border border-slate-300 rounded font-mono-tech bg-white"
+                      />
+                    </label>
+                    <label className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500">Ep (GPa)</span>
+                      <input
+                        type="number" step="1" min="50" value={td.Ep}
+                        onChange={(e) => {
+                          const v = +e.target.value;
+                          if (v > 0) onSceneChange((p) => ({ ...p, tendons: (p.tendons ?? []).map((q) => q.id === td.id ? { ...q, Ep: v } : q) }), true);
+                        }}
+                        className="w-full px-1.5 py-0.5 border border-slate-300 rounded font-mono-tech bg-white"
+                      />
+                    </label>
+                  </div>
+                  <details className="text-[10.5px] text-slate-500">
+                    <summary className="cursor-pointer hover:text-slate-800">Traçado do cabo ({td.path.length} pts)</summary>
+                    <input
+                      type="text"
+                      defaultValue={td.path.map((pt) => `${pt[0]},${pt[1]}`).join("; ")}
+                      key={td.id + JSON.stringify(td.path)}
+                      onBlur={(e) => {
+                        const pts = e.target.value.split(";").map((t) => t.split(",").map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite)) as [number, number][];
+                        if (pts.length >= 2) onSceneChange((p) => ({ ...p, tendons: (p.tendons ?? []).map((q) => q.id === td.id ? { ...q, path: pts } : q) }), true);
+                      }}
+                      className="mt-1 w-full px-1.5 py-1 border border-slate-300 rounded font-mono-tech text-slate-700 bg-white"
+                    />
+                  </details>
+                </div>
+              ))}
             </section>
           </div>
         )}

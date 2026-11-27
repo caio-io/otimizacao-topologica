@@ -3,6 +3,7 @@ import type {
   NlBarResult,
   NlCurvePoint,
   NlFailure,
+  NlTendonResult,
   NlUtilization,
   PrincipalField,
   StmModel,
@@ -21,7 +22,10 @@ export type Tool =
   | "load"
   | "qload"
   | "support"
-  | "rebar";
+  | "rebar"
+  | "arcbar";
+
+export type StmDisplayMode = "both" | "axes" | "contours";
 
 export type ViewMode =
   | "topo"
@@ -54,6 +58,7 @@ export interface NlFrameInfo {
   stress: Float64Array;
   barSamples: { x: number; y: number; N: number }[][];
   bars: NlBarResult[];
+  tendons?: NlTendonResult[];
   maxEpsC: number;
   crushStrain: number;
   epsCu: number;

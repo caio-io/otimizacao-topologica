@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { BENCHMARKS, SCENE_PRESETS } from "@stm/core";
-import type { BenchmarkEntry, Scene } from "@stm/core";
+import type { BenchmarkEntry, Scene, StmModel } from "@stm/core";
 
 const localMods = import.meta.glob("../../../../packages/core/src/presets.local.ts", { eager: true }) as Record<
   string,
@@ -67,6 +67,11 @@ export function validateSceneObject(o: any): Scene | null {
     [b.areaCm2, b.fy, b.ft, b.Es, b.epsU].every((v: unknown) => num(v) && v > 0) &&
     b.ft >= b.fy && b.fy / (b.Es * 1000) < b.epsU;
   if (o.bars !== undefined && !(Array.isArray(o.bars) && o.bars.every(okBar))) delete o.bars;
+  const okTendon = (td: any) =>
+    td && typeof td.id === "string" && typeof td.label === "string" && Array.isArray(td.path) && td.path.length >= 2 && td.path.every(okPt) &&
+    [td.areaCm2, td.Ep, td.fpy, td.fpu, td.epsU].every((v: unknown) => num(v) && v > 0) &&
+    num(td.P0) && td.P0 >= 0 && td.fpu >= td.fpy;
+  if (o.tendons !== undefined && !(Array.isArray(o.tendons) && o.tendons.every(okTendon))) delete o.tendons;
   if (o.nl !== undefined && !(o.nl && (o.nl.values === "mean" || o.nl.values === "design") && num(o.nl.epsCu) && o.nl.epsCu > 0 && num(o.nl.crushLength) && o.nl.crushLength >= 0)) delete o.nl;
   if (o.nl && !["NBR6118", "EC2", "MC2010", "ACI318"].includes(o.nl.code)) delete o.nl.code;
   return o as Scene;
@@ -92,8 +97,101 @@ export function saveScene(s: Scene): void {
 
 export function maxNumericId(s: Scene): number {
   let n = 100;
-  for (const q of [...s.shapes, ...s.loads, ...s.supports, ...(s.bars ?? [])]) {
+  for (const q of [...s.shapes, ...s.loads, ...s.supports, ...(s.bars ?? []), ...(s.tendons ?? [])]) {
     n = Math.max(n, (parseInt(q.id.replace(/\D/g, ""), 10) || 0) + 1);
   }
   return n;
+}
+
+export interface ProjectFileV1 {
+  version: 1;
+  name: string;
+  savedAt: string;
+  scene: Scene;
+  ui?: {
+    modelId?: string;
+    tab?: string;
+    viewMode?: string;
+    optMethod?: "beso" | "simp";
+    volfrac?: number;
+    rmin?: number;
+    rminAuto?: boolean;
+  };
+  results?: {
+    stm?: StmModel | null;
+  };
+}
+
+export interface RecentProjectEntry {
+  id: string;
+  name: string;
+  savedAt: string;
+  file: ProjectFileV1;
+}
+
+const RECENT_KEY = "stm-recent-projects";
+
+export function serializeProjectFile(proj: Omit<ProjectFileV1, "version" | "savedAt">): ProjectFileV1 {
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    ...proj,
+  };
+}
+
+export function parseProjectFile(text: string): ProjectFileV1 | null {
+  try {
+    const raw = JSON.parse(text);
+    if (raw && typeof raw === "object" && raw.version === 1 && raw.scene) {
+      const scene = validateSceneObject(raw.scene);
+      if (!scene) return null;
+      return {
+        version: 1,
+        name: typeof raw.name === "string" && raw.name.trim() ? raw.name : "Projeto STM",
+        savedAt: typeof raw.savedAt === "string" ? raw.savedAt : new Date().toISOString(),
+        scene,
+        ui: raw.ui && typeof raw.ui === "object" ? raw.ui : undefined,
+        results: raw.results && typeof raw.results === "object" ? raw.results : undefined,
+      };
+    }
+    const legacy = validateSceneObject(raw);
+    if (!legacy) return null;
+    return {
+      version: 1,
+      name: "Modelo importado",
+      savedAt: new Date().toISOString(),
+      scene: legacy,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function loadRecentProjects(): RecentProjectEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((e) => e && typeof e.id === "string" && typeof e.name === "string" && e.file?.version === 1);
+  } catch {
+    return [];
+  }
+}
+
+export function saveRecentProject(file: ProjectFileV1): RecentProjectEntry[] {
+  const existing = loadRecentProjects().filter((e) => e.name !== file.name);
+  const entry: RecentProjectEntry = {
+    id: `${Date.now()}`,
+    name: file.name,
+    savedAt: file.savedAt,
+    file: { ...file, results: undefined }, // evita estourar quota do localStorage com resultados pesados
+  };
+  const next = [entry, ...existing].slice(0, 6);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore storage quota */
+  }
+  return next;
 }

@@ -42,12 +42,18 @@ export interface SupportSpec {
   uy: boolean;
 }
 
+export type BarCurveSpec =
+  | { type: "arc"; p1: [number, number]; p2: [number, number]; p3: [number, number] }
+  | { type: "fillet"; radius: number };
+
 /** barra de armadura (análise não linear): poligonal embutida no concreto, aderência perfeita */
 export interface BarSpec {
   id: string;
   label: string;
   /** poligonal em coordenadas da cena [m]; precisa ficar dentro da geometria */
   path: [number, number][];
+  /** especificação opcional de curvatura (arco por 3 pontos ou concordância nos cantos) */
+  curve?: BarCurveSpec;
   /** polilinhas adicionais do mesmo grupo (mesma área e aço): estribos, barras repetidas */
   extra?: [number, number][][];
   /** área TOTAL da armadura da barra [cm²] (já somadas as barras ao longo da espessura) */
@@ -56,6 +62,29 @@ export interface BarSpec {
   steelClass?: "CA50" | "CA60" | "B500B" | "custom";
   /** escoamento e resistência à tração [MPa], módulo [GPa], deformação de ruptura (fração) */
   fy: number; ft: number; Es: number; epsU: number;
+}
+
+/** Cabo de protensão não aderente (Fase B1 PROVISÓRIO: aderência zero, sem perdas por atrito/relaxação) */
+export interface TendonSpec {
+  id: string;
+  label: string;
+  /** poligonal do cabo em coordenadas da cena [m] */
+  path: [number, number][];
+  /** especificação opcional de curvatura */
+  curve?: BarCurveSpec;
+  /** área total de aço de protensão [cm²] */
+  areaCm2: number;
+  /** força inicial efetiva de protensão P0 [kN] */
+  P0: number;
+  /** módulo de elasticidade Ep [GPa] */
+  Ep: number;
+  /** resistência ao escoamento fpy e ruptura fpu [MPa] */
+  fpy: number;
+  fpu: number;
+  /** deformação última epsU (fração) */
+  epsU: number;
+  /** sempre true na Fase B1 */
+  unbonded: true;
 }
 
 /** parâmetros da análise não linear (Nível 2) */
@@ -88,6 +117,8 @@ export interface Scene {
   supports: SupportSpec[];
   /** armadura (só para a análise não linear) */
   bars?: BarSpec[];
+  /** cabos de protensão não aderentes (Fase B1 PROVISÓRIO) */
+  tendons?: TendonSpec[];
   /** parâmetros da análise não linear */
   nl?: NlParams;
 }

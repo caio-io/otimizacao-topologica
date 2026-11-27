@@ -258,6 +258,38 @@ export const ReportModal: React.FC<ReportModalProps> = ({
               </table>
             </div>
           )}
+
+          {nl && nl.tendons && nl.tendons.length > 0 && (
+            <div className="mb-4">
+              <h3 className="font-bold uppercase text-[10.5px] tracking-wider text-slate-500 mb-2">
+                Cabos de Protensão Não Aderentes (Fase B1 · PROVISÓRIO — sem perdas por atrito/relaxação)
+              </h3>
+              <table className="w-full text-[11px] font-mono-tech border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-300 text-slate-500">
+                    <th className="text-left py-1 font-sans">Cabo</th>
+                    <th className="text-right py-1 font-sans">P0 (kN)</th>
+                    <th className="text-right py-1 font-sans">P última (kN)</th>
+                    <th className="text-right py-1 font-sans">ΔP (kN)</th>
+                    <th className="text-right py-1 font-sans">σp (MPa)</th>
+                    <th className="text-right py-1 font-sans">Escoou</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nl.tendons.map((td, idx) => (
+                    <tr key={idx} className="border-b border-slate-100">
+                      <td className="text-left py-1 font-sans">{td.label}</td>
+                      <td className="text-right py-1">{td.P0.toFixed(1)}</td>
+                      <td className="text-right py-1">{td.P.toFixed(1)}</td>
+                      <td className="text-right py-1">{td.deltaP >= 0 ? "+" : ""}{td.deltaP.toFixed(1)}</td>
+                      <td className="text-right py-1">{td.sigmaMPa.toFixed(0)}</td>
+                      <td className="text-right py-1">{td.yielded ? "sim" : "não"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

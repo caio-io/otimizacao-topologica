@@ -241,6 +241,23 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
                   </div>
                 )}
 
+                {nl.tendons && nl.tendons.length > 0 && (
+                  <div className="bg-purple-50/70 border border-purple-200 rounded-md px-2.5 py-1.5 text-[11px]">
+                    <div className="font-medium text-purple-900 mb-0.5 flex items-center justify-between">
+                      <span>Cabos não aderentes (Fase B1)</span>
+                      <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold">PROVISÓRIO</span>
+                    </div>
+                    <div className="space-y-0.5 font-mono-tech text-[10.5px] text-purple-900">
+                      {nl.tendons.map((td, idx) => (
+                        <div key={idx} className="flex justify-between gap-2">
+                          <span className="font-sans font-medium">{td.label}</span>
+                          <span>P={td.P.toFixed(1)} kN (ΔP={td.deltaP >= 0 ? "+" : ""}{td.deltaP.toFixed(1)}) · σ={td.sigmaMPa.toFixed(0)} MPa</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {frame.reactions.length > 0 && (
                   <div className="bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-[11px]">
                     <div className="flex items-center justify-between text-slate-600 font-medium mb-0.5">
