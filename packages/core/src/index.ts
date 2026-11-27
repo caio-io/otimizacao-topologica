@@ -13,3 +13,4 @@ export * from "./codes";
 export * from "./rebar";
 export * from "./benchmarks";
 export * from "./templates";
+export * from "./stm";
