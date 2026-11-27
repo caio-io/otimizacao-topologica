@@ -97,6 +97,9 @@ export function xiaIndices(p: Problem, solid: Uint8Array, opts: { fy?: number; r
   // raio de média não local: r0 = V / (2·L·t) = A / (2·L)
   const sk = thinning(solid, nelx, nely);
   const L = skeletonLength(sk, nelx, nely, h);
+  if (nDomain === 0 || (opts.r0 === undefined && !(L > 0))) {
+    return { trs: 0, sr: 0, skeletonLength: L, r0: opts.r0 ?? 0 };
+  }
   const r0 = opts.r0 ?? (nDomain * h * h) / (2 * L);
 
   const tensile = (S: ReturnType<typeof stressesFor>, e: number, active: boolean) =>
@@ -119,6 +122,7 @@ export function xiaIndices(p: Problem, solid: Uint8Array, opts: { fy?: number; r
         const ii = i + di, jj = j + dj;
         if (ii < 0 || jj < 0 || ii >= nelx || jj >= nely) continue;
         const k = ii * nely + jj;
+        if (!domain[k]) continue;
         ws += w;
         if (!tensile(S, k, active(k))) continue;
         a += w * S.sx[k]; b += w * S.sy[k]; c += w * S.txy[k];
@@ -149,9 +153,13 @@ export function xiaIndices(p: Problem, solid: Uint8Array, opts: { fy?: number; r
 }
 
 /**
- * Volume de aço [cm³] estimado a partir do campo de tensões da topologia (Queiroz & Leonel, 2025):
- * cada tirante recebe As = F/fyd com F = σ1 médio × área do tirante, logo V = ∫σ1 dV / fyd nas regiões tracionadas
- * (σ1 > 0 e σ1 > −5·σ2, como em Xia et al.). `fyd` em kN/m² (CA-50: 43,5 kN/cm² = 435 000 kN/m²).
+ * Estimativa contínua do volume de aço [cm³] a partir do campo de tensões por elemento da topologia:
+ * integra `∫ σ1 dV / fyd` sobre os elementos sólidos na região tracionada (`σ1 > 0` e `σ1 > −ratio·σ2`, critério de
+ * Xia et al., 2020, com `ratio = 5`).
+ *
+ * Atenção: esta função é uma **aproximação baseada no campo de tensões por elemento** — difere da extração explícita
+ * de tirantes individuais e soma `Σ As·L_tirante` (Eq. [6] e Fig. 8) usada em Queiroz & Leonel (2025).
+ * `fyd` em kN/m² (CA-50: 43,5 kN/cm² = 435 000 kN/m²).
  */
 export function steelVolume(p: Problem, solid: Uint8Array, fyd = 435e3, ratio = 5): number {
   const nel = p.nelx * p.nely;

@@ -55,10 +55,26 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
     try {
       gen = solveNonlinearSteps(problem, { concrete, bars: barsFromScene(d.scene), origin: r.origin, checkCrushing: true, crushLength: par.crushLength || undefined, dLambda: 0.1, maxIt: 200, stepwise: true });
     } catch (err) { post({ kind: "error", token, errors: [String((err as Error).message ?? err)], warnings: r.warnings }); return; }
-    const groupReactions = (reaction: Float64Array) => r.supportGroups.map((g) => ({
-      id: g.id, x: g.x, y: g.y,
-      rx: g.nodes.reduce((a, n) => a + reaction[2 * n], 0), ry: g.nodes.reduce((a, n) => a + reaction[2 * n + 1], 0),
-    }));
+    const groupReactions = (reaction: Float64Array) => {
+      const used = new Set<number>();
+      return r.supportGroups.map((g) => {
+        let rx = 0, ry = 0;
+        for (const n of g.nodes) {
+          if (model.isFixed[2 * n] && !used.has(2 * n)) { rx += reaction[2 * n]; used.add(2 * n); }
+          if (model.isFixed[2 * n + 1] && !used.has(2 * n + 1)) { ry += reaction[2 * n + 1]; used.add(2 * n + 1); }
+        }
+        return { id: g.id, x: g.x, y: g.y, rx, ry };
+      });
+    };
+    /** resíduo absoluto de equilíbrio global em kN (ΣR + λ·ΣF), coerente com `supportReactions` */
+    const nlResidualKn = (reaction: Float64Array, lam: number) => {
+      let sx = 0, sy = 0;
+      for (let d = 0; d < model.ndof; d += 2) {
+        sx += lam * model.fRaw[d] + reaction[d];
+        sy += lam * model.fRaw[d + 1] + reaction[d + 1];
+      }
+      return { x: sx, y: sy };
+    };
     const base = { kind: "frame", token, dims, mask: problem.mask, compliance: 0, volume: 1, change: 0, rho, field, P0 };
     let first = true, count = 0, last: NlStep | null = null;
     const step = () => {
@@ -81,7 +97,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
           setTimeout(step, 0);
         } else {
           const res = g.value;
-          post({ ...base, iter: count + 1, u: res.u, reactions: groupReactions(res.reaction), residual: res.equilibrium, done: true, warnings: first ? r.warnings : [],
+          post({ ...base, iter: count + 1, u: res.u, reactions: groupReactions(res.reaction), residual: nlResidualKn(res.reaction, res.lambda), done: true, warnings: first ? r.warnings : [],
             nl: { lambda: res.lambda, mode: res.mode, epsComp: res.epsComp, epsTens: res.epsTens, stress: res.stress, barSamples: res.barSamples, bars: res.bars, maxEpsC: res.maxCompStrain, crushStrain: res.crushStrain,
               crush: res.crush, failure: res.failure, firstPlateau: res.firstPlateau,
               epsCu: concrete.epsu, fc: concrete.fc, crushLength: par.crushLength, equilibrium: res.equilibrium } });

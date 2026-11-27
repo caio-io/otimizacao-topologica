@@ -32,25 +32,34 @@ export const nbrConcrete = (fckMPa: number, gammaC = 1.4): ConcreteLaw => ({
 });
 
 export interface SteelLaw {
-  fy: number; ft: number; Es: number;
+  /** tensão de escoamento [kN/m²] (1 MPa = 1e3 kN/m²) */
+  fy: number;
+  /** tensão última na ruptura [kN/m²] */
+  ft: number;
+  /** módulo de elasticidade do aço [kN/m²] (1 GPa = 1e6 kN/m²) */
+  Es: number;
   /** tension stiffening simplificado (interno): comportamento médio da barra na tração, ver `withTensionStiffening` */
   ts?: { sigCr: number; epsCr: number; delta: number; epsU0: number };
-  /** deformação na ruptura (limite de verificação) */
+  /** deformação na ruptura (fração adimensional, ex.: 0,05 = 5 %) */
   epsU: number;
 }
 
-/** Aço CA-50 com valores de projeto: fyd = 500/1,15, ft = 1,08·fy, Es = 210 GPa, εu = 5 %. */
+/** Aço CA-50 com valores de projeto em unidades do solver [kN/m²]: fyd = 500/1,15 MPa, ft = 1,08·fy, Es = 210 GPa, εu = 5 %. */
 export const ca50: SteelLaw = { fy: 500e3 / 1.15, ft: 1.08 * (500e3 / 1.15), Es: 210e6, epsU: 0.05 };
 
 /**
- * Aços passivos usuais no Brasil (valores de PROJETO: fyd = fyk/1,15). A relação ft/fy e a deformação de ruptura são
- * valores ASSUMIDOS (CA-50: ft = 1,08·fy, εu = 5 %; CA-60: ft = 1,05·fy, εu = 2,5 %, coerentes com as classes de ductilidade
- * B e A do fib Model Code 2010) — confirmar na NBR 7480.
+ * Classes de aço passivo em unidades de entrada da cena (`BarSpec`):
+ *  - `fy` e `ft` em **MPa** (valores de PROJETO: fyd = fyk/1,15);
+ *  - `Es` em **GPa**;
+ *  - `epsU` adimensional (fração).
+ * A conversão para o solver (`kN/m²`) ocorre em `barsFromScene()` (`fy/ft × 1e3`, `Es × 1e6`).
+ *
+ * CA-50 / CA-60: ft/fy e εu são valores ASSUMIDOS (coerentes com as classes B e A do fib MC2010) — confirmar na NBR 7480.
  */
 export const STEEL_CLASSES = {
   CA50: { label: "CA-50", fy: 500 / 1.15, ft: (1.08 * 500) / 1.15, Es: 210, epsU: 0.05 },
   CA60: { label: "CA-60", fy: 600 / 1.15, ft: (1.05 * 600) / 1.15, Es: 210, epsU: 0.025 },
-  /** aço europeu B500B: ft/fy = 1,08 e εu = 5 % (livro do CSFM, p. 22); γs = 1,15 e Es = 200 GPa são PROVISÓRIOS (EC2/MC2010) */
+  /** aço europeu B500B: ft/fy = 1,08 e εu = 5 % (livro do CSFM, p. 22); γs = 1,15 e Es = 200 GPa conferidos no fib MC2010 (Bol. 65, Tab. 4.5-8 e p. 186; fonte secundária para EC2) */
   B500B: { label: "B500B", fy: 500 / 1.15, ft: (1.08 * 500) / 1.15, Es: 200, epsU: 0.05 },
 } as const;
 export type SteelClass = keyof typeof STEEL_CLASSES;
@@ -225,18 +234,23 @@ function concreteSigma(c: ConcreteLaw, e: number) {
  * reduz a ductilidade (εu efetivo = εu − Δ/Es). fct e ρeff vêm do usuário; ρeff real depende da geometria (Fig. 3.3 do livro).
  */
 export function withTensionStiffening(s: SteelLaw, fct: number, rhoEff: number, lambda = 0.67): SteelLaw {
+  if (!(rhoEff > 0 && rhoEff < 1)) throw new Error(`withTensionStiffening: rhoEff inválido (${rhoEff}); esperado 0 < rhoEff < 1`);
+  if (!(fct >= 0)) throw new Error(`withTensionStiffening: fct inválido (${fct}); esperado fct >= 0`);
   const sigCr0 = (fct * (1 - rhoEff)) / rhoEff;
   const sigCr = Math.min(sigCr0, 0.9 * s.fy), delta = (lambda / 2) * sigCr;
   const epsCr = (sigCr - delta) / s.Es;
   return { ...s, epsU: s.epsU - delta / s.Es, ts: { sigCr, epsCr, delta, epsU0: s.epsU } };
 }
 
-/** resolve A·X = B (A n×n, B n×m, ambos em linhas) por eliminação com pivô parcial; B vira X */
-function luSolve(A: Float64Array, n: number, B: Float64Array, m: number) {
+/**
+ * Resolve A·X = B (A n×n, B n×m, ambos em linhas) por eliminação com pivô parcial; B vira X.
+ * Retorna `false` se algum pivô for nulo/quase nulo (≤ 1e-300) ou não finito, sem mascarar a singularidade.
+ */
+function luSolve(A: Float64Array, n: number, B: Float64Array, m: number): boolean {
   for (let k = 0; k < n; k++) {
     let piv = k;
     for (let r = k + 1; r < n; r++) if (Math.abs(A[r * n + k]) > Math.abs(A[piv * n + k])) piv = r;
-    if (Math.abs(A[piv * n + k]) < 1e-300) A[piv * n + k] = 1e-300;
+    if (!(Math.abs(A[piv * n + k]) > 1e-300)) return false;
     if (piv !== k) {
       for (let c = 0; c < n; c++) { const t = A[k * n + c]; A[k * n + c] = A[piv * n + c]; A[piv * n + c] = t; }
       for (let c = 0; c < m; c++) { const t = B[k * m + c]; B[k * m + c] = B[piv * m + c]; B[piv * m + c] = t; }
@@ -252,11 +266,12 @@ function luSolve(A: Float64Array, n: number, B: Float64Array, m: number) {
     for (let j = k + 1; j < n; j++) acc -= A[k * n + j] * B[j * m + c];
     B[k * m + c] = acc / A[k * n + k];
   }
+  return true;
 }
 
 function steelSigma(s: SteelLaw, eps: number) {
   if (s.ts && eps > 0) {
-    const { sigCr, epsCr, delta, epsU0 } = s.ts, ey = s.fy / s.Es, Esh = (s.ft - s.fy) / (epsU0 - ey);
+    const { sigCr, epsCr, delta, epsU0 } = s.ts, ey = s.fy / s.Es, Esh = (s.ft - s.fy) / Math.max(epsU0 - ey, 1e-12);
     if (eps <= epsCr) return (sigCr * eps) / epsCr;
     const epsYm = (s.fy - delta) / s.Es;
     if (eps <= epsYm) return delta + s.Es * eps;
@@ -264,7 +279,7 @@ function steelSigma(s: SteelLaw, eps: number) {
   }
   const a = Math.abs(eps), ey = s.fy / s.Es, sg = Math.sign(eps);
   if (a <= ey) return s.Es * eps;
-  const Esh = (s.ft - s.fy) / (s.epsU - ey);
+  const Esh = (s.ft - s.fy) / Math.max(s.epsU - ey, 1e-12);
   return sg * (s.fy + Esh * (Math.min(a, s.epsU) - ey));
 }
 
@@ -322,11 +337,11 @@ function steelTangent(s: SteelLaw, eps: number) {
     const { sigCr, epsCr, delta, epsU0 } = s.ts, ey = s.fy / s.Es;
     if (eps <= epsCr) return sigCr / epsCr;
     if (eps <= (s.fy - delta) / s.Es) return s.Es;
-    return Math.max((s.ft - s.fy) / (epsU0 - ey), 1e-3 * s.Es);
+    return Math.max((s.ft - s.fy) / Math.max(epsU0 - ey, 1e-12), 1e-3 * s.Es);
   }
   const ey = s.fy / s.Es;
   if (Math.abs(eps) <= ey) return s.Es;
-  return Math.max((s.ft - s.fy) / (s.epsU - ey), 1e-3 * s.Es);
+  return Math.max((s.ft - s.fy) / Math.max(s.epsU - ey, 1e-12), 1e-3 * s.Es);
 }
 
 export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlStep, NlResult> {
@@ -469,7 +484,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
   }
 
-  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[] }
+  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[]; singular: boolean }
 
   let maxEpsC = 0, epsEl = new Float64Array(0), epsT = new Float64Array(0), sEl = new Float64Array(0);
   const useQM6 = (opt.element ?? "q4") === "qm6";
@@ -524,6 +539,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const assemble = (u: Float64Array, needK = true): Asm => {
     const L = needK ? new Float64Array(ndof * w) : NOMAT;
     const fint = new Float64Array(ndof);
+    let singular = false;
     maxEpsC = 0; epsEl = new Float64Array(nelx * nely); epsT = new Float64Array(nelx * nely); sEl = new Float64Array(3 * nelx * nely);
     const ue = new Float64Array(8), Ke = new Float64Array(64), B = new Float64Array(24), DB = new Float64Array(24), fe = new Float64Array(8);
     for (let e = 0; e < nelx * nely; e++) {
@@ -585,7 +601,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
             }
           }
           for (let r = 0; r < 4; r++) rhs4[r] = -fa[r];
-          luSolve(Kaa.slice(), 4, rhs4, 1);
+          if (!luSolve(Kaa.slice(), 4, rhs4, 1)) { singular = true; break; }
           let dm = 0;
           for (let r = 0; r < 4; r++) { alpha[ao + r] += rhs4[r]; dm = Math.max(dm, Math.abs(rhs4[r])); }
           if (dm < 1e-12) break;
@@ -615,8 +631,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
         if (needK) {
           // Ke = Kuu − Kua · Kaa⁻¹ · Kau (X = Kaa⁻¹ Kau, 4×8)
           for (let r = 0; r < 4; r++) for (let c2 = 0; c2 < 8; c2++) Xm[r * 8 + c2] = Kua[c2 * 4 + r];
-          luSolve(Kaa.slice(), 4, Xm, 8);
-          for (let r = 0; r < 8; r++) for (let q = 0; q < 8; q++) {
+          if (!luSolve(Kaa.slice(), 4, Xm, 8)) { singular = true; Ke.set(Kuu); }
+          else for (let r = 0; r < 8; r++) for (let q = 0; q < 8; q++) {
             let acc = Kuu[r * 8 + q];
             for (let k = 0; k < 4; k++) acc -= Kua[r * 4 + k] * Xm[k * 8 + q];
             Ke[r * 8 + q] = acc;
@@ -647,7 +663,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       const k = (bar.area * Esec) / h, N = bar.area * sg;
       perBar[be.bar].push(N);
       barEps[be.bar] = Math.max(barEps[be.bar], Math.abs(eps));
-      if (Math.abs(eps) > s.fy / s.Es) yielded[be.bar] = true;
+      const eyT = s.ts ? (s.fy - s.ts.delta) / s.Es : s.fy / s.Es;
+      if (eps > eyT || eps < -s.fy / s.Es) yielded[be.bar] = true;
       const dir = [-be.cx, -be.cy, be.cx, be.cy];
       for (let a = 0; a < 4; a++) {
         fint[da[a]] += N * dir[a];
@@ -667,7 +684,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       const N = bar.area * sg, kk = bar.area * Esec * pc.len;
       perBar[pc.bar].push(N);
       barEps[pc.bar] = Math.max(barEps[pc.bar], Math.abs(eps));
-      if (Math.abs(eps) > st.fy / st.Es) yielded[pc.bar] = true;
+      const eyT = st.ts ? (st.fy - st.ts.delta) / st.Es : st.fy / st.Es;
+      if (eps > eyT || eps < -st.fy / st.Es) yielded[pc.bar] = true;
       for (let a = 0; a < 8; a++) {
         const i = edof[b0 + a];
         fint[i] += N * pc.len * pc.g[a];
@@ -680,7 +698,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       }
     }
     perBar.forEach((arr, k) => { barForces[k] = Float64Array.from(arr); });
-    return { L, fint, maxEpsC, epsEl, epsT, sEl, barForces, barEps, yielded };
+    return { L, fint, maxEpsC, epsEl, epsT, sEl, barForces, barEps, yielded, singular };
   };
 
   // ---- equilíbrio em um nível de carga: correção pelo resíduo com rigidez secante
@@ -700,25 +718,27 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     let asm = assemble(u), rel = Infinity, its = 0;
     const prevCr = new Uint8Array(nelx * nely);
     for (; its < itLimit; its++) {
+      if (asm.singular) return { ok: false, u, asm, rel, its };
       let nr = 0;
       for (let d = 0; d < ndof; d++) { R[d] = fixedEff[d] ? 0 : rhsLam[d] - asm.fint[d]; nr += R[d] * R[d]; }
       nr = Math.sqrt(nr);
       rel = nr / nf;
       if (rel < tolEff) return { ok: true, u, asm, rel, its };
-      solveBandedAssembled(asm.L, ndof, bw, fixedEff, R, du);
+      if (!solveBandedAssembled(asm.L, ndof, bw, fixedEff, R, du)) return { ok: false, u, asm, rel, its };
       // passo completo; com busca linear, se não reduz o resíduo tenta frações do passo e fica com a melhor
       let alphaUsed = 1;
       let uTry = u.map((v, d) => v + du[d]), bad = uTry.some((v) => !Number.isFinite(v));
       if (bad) return { ok: false, u, asm, rel, its };
       let asmTry = assemble(uTry);
       if (useLS) {
-        const n1 = resNorm(asmTry);
+        const n1 = asmTry.singular ? Infinity : resNorm(asmTry);
         if (!(n1 < nr)) {
           let bestA = 1, bestN = n1;
           for (const a of [0.5, 0.25, 0.125, 0.0625]) {
             lsTrials++;
             const ua = u.map((v, d) => v + a * du[d]);
-            const n = resNorm(assemble(ua, false));
+            const at = assemble(ua, false);
+            const n = at.singular ? Infinity : resNorm(at);
             if (n < bestN) { bestN = n; bestA = a; }
             if (n < nr) break; // reduziu: basta
           }
@@ -830,12 +850,26 @@ export function solveNonlinear(p: Problem, opt: NlOptions): NlResult {
   return r.value;
 }
 
-/** barras da cena (cm², MPa, GPa) → barras do solver (m², kN/m²) */
+/**
+ * Converte barras da cena (`BarSpec`: `areaCm2` em cm², `fy`/`ft` em MPa, `Es` em GPa, `epsU` fração)
+ * para unidades do solver (`Bar`: `area` em m², `fy`/`ft`/`Es` em kN/m²). Valida positividade e coerência `εy < εu`.
+ */
 export function barsFromScene(s: Scene): Bar[] {
-  return (s.bars ?? []).map((b) => ({
-    x0: 0, y0: 0, x1: 0, y1: 0, path: b.path, more: b.extra, area: b.areaCm2 * 1e-4, label: b.label,
-    steel: { fy: b.fy * 1e3, ft: b.ft * 1e3, Es: b.Es * 1e6, epsU: b.epsU },
-  }));
+  return (s.bars ?? []).map((b, k) => {
+    const tag = b.label || `B${k + 1}`;
+    const ok = (v: number) => Number.isFinite(v) && v > 0;
+    if (!ok(b.areaCm2) || !ok(b.fy) || !ok(b.ft) || !ok(b.Es) || !ok(b.epsU))
+      throw new Error(`barra ${tag}: parâmetros inválidos (areaCm2, fy, ft, Es e epsU devem ser positivos e finitos)`);
+    if (b.ft < b.fy)
+      throw new Error(`barra ${tag}: ft (${b.ft} MPa) não pode ser menor que fy (${b.fy} MPa)`);
+    const fy = b.fy * 1e3, ft = b.ft * 1e3, Es = b.Es * 1e6; // MPa → kN/m², GPa → kN/m²
+    if (fy / Es >= b.epsU)
+      throw new Error(`barra ${tag}: deformação de escoamento fy/Es (${(fy / Es * 1000).toFixed(2)} ‰) deve ser menor que εu (${(b.epsU * 1000).toFixed(2)} ‰)`);
+    return {
+      x0: 0, y0: 0, x1: 0, y1: 0, path: b.path, more: b.extra, area: b.areaCm2 * 1e-4, label: b.label,
+      steel: { fy, ft, Es, epsU: b.epsU },
+    };
+  });
 }
 
 /** concreto da cena: valores médios (fc = fck) ou de projeto (fcd da norma escolhida; padrão NBR 6118: 0,85·fck/1,4) */

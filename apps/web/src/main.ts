@@ -18,13 +18,16 @@ function loadSaved(): Scene | null {
     const o = JSON.parse(localStorage.getItem("stm-scene") ?? "null");
     const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
     const okPt = (p: unknown) => Array.isArray(p) && p.length === 2 && p.every(num);
-    if (!o || !num(o.h) || o.h <= 0 || !num(o.bearing) || !num(o.t) || !num(o.E) || !num(o.nu)) return null;
+    if (!o || !num(o.h) || o.h <= 0 || !num(o.bearing) || o.bearing < 0 || !num(o.t) || o.t <= 0 || !num(o.E) || o.E <= 0 || !num(o.nu) || o.nu <= -1 || o.nu >= 0.5) return null;
     if (!Array.isArray(o.shapes) || !o.shapes.every((q: any) => typeof q.id === "string" && (q.mode === "add" || q.mode === "cut") && Array.isArray(q.pts) && q.pts.every(okPt))) return null;
     if (!Array.isArray(o.loads) || !o.loads.every((l: any) => typeof l.id === "string" && [l.x, l.y, l.fx, l.fy].every(num))) return null;
     if (!Array.isArray(o.supports) || !o.supports.every((s: any) => typeof s.id === "string" && [s.x0, s.y0, s.x1, s.y1].every(num) && typeof s.ux === "boolean" && typeof s.uy === "boolean")) return null;
-    const okBar = (b: any) => b && typeof b.id === "string" && typeof b.label === "string" && Array.isArray(b.path) && b.path.every(okPt) && [b.areaCm2, b.fy, b.ft, b.Es, b.epsU].every(num);
+    const okBar = (b: any) =>
+      b && typeof b.id === "string" && typeof b.label === "string" && Array.isArray(b.path) && b.path.length >= 2 && b.path.every(okPt) &&
+      [b.areaCm2, b.fy, b.ft, b.Es, b.epsU].every((v: unknown) => num(v) && (v as number) > 0) &&
+      b.ft >= b.fy && b.fy / (b.Es * 1000) < b.epsU;
     if (o.bars !== undefined && !(Array.isArray(o.bars) && o.bars.every(okBar))) delete o.bars;
-    if (o.nl !== undefined && !(o.nl && (o.nl.values === "mean" || o.nl.values === "design") && num(o.nl.epsCu) && num(o.nl.crushLength))) delete o.nl;
+    if (o.nl !== undefined && !(o.nl && (o.nl.values === "mean" || o.nl.values === "design") && num(o.nl.epsCu) && o.nl.epsCu > 0 && num(o.nl.crushLength) && o.nl.crushLength >= 0)) delete o.nl;
     if (o.nl && !["NBR6118", "EC2", "MC2010", "ACI318"].includes(o.nl.code)) delete o.nl.code;
     return o as Scene;
   } catch { return null; }
@@ -882,7 +885,19 @@ function renderBars() {
     area.onchange = () => { const v = +area.value; if (v > 0) { b.areaCm2 = v; changed(); } else area.value = String(b.areaCm2); };
     row.push(area);
     const fy = document.createElement("input"); fy.type = "number"; fy.step = "any"; fy.min = "0"; fy.value = String(Math.round(b.fy * 10) / 10); fy.disabled = (b.steelClass ?? "custom") !== "custom";
-    fy.onchange = () => { const v = +fy.value; if (v > 0) { b.fy = v; b.ft = Math.max(b.ft, v * 1.05); changed(); } else fy.value = String(b.fy); };
+    fy.onchange = () => {
+      const v = +fy.value;
+      const es = Number.isFinite(b.Es) && b.Es > 0 ? b.Es : 210;
+      const epsU = Number.isFinite(b.epsU) && b.epsU > 0 ? b.epsU : 0.05;
+      if (Number.isFinite(v) && v > 0 && v / (es * 1000) < epsU) {
+        const ratio = b.fy > 0 && b.ft >= b.fy ? Math.max(1.05, b.ft / b.fy) : 1.08;
+        b.fy = v; b.ft = v * ratio; b.Es = es; b.epsU = epsU;
+        changed();
+      } else {
+        if (Number.isFinite(v) && v > 0) toast(`fy = ${v} MPa incompatível com Es = ${es} GPa e εu = ${(epsU * 100).toFixed(1)} % (εy ≥ εu).`);
+        fy.value = String(Math.round(b.fy * 10) / 10);
+      }
+    };
     row.push(fy);
     const del = document.createElement("button"); del.className = "del"; del.textContent = "×"; del.title = `Remover ${b.label}`;
     del.onclick = () => { scene.bars = (scene.bars ?? []).filter((q) => q.id !== b.id); hoverBar = null; changed(); renderBars(); };
@@ -915,7 +930,13 @@ $("nl").onclick = () => {
   if ($("nl").textContent === "Parar") { worker.postMessage({ stop: true }); return; }
   readNl(); localStorage.setItem("stm-scene", JSON.stringify(scene));
   frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; $("nlOut").innerHTML = ""; $("resultsStrip").innerHTML = STRIP_EMPTY;
-  if (scene.bars?.length && scene.h > 0.05) showMsg([], [`Malha grossa (elemento de ${scene.h} m): a capacidade costuma ser SUPERESTIMADA (na S1, 0,1 m dá cerca de 50 % a mais que 0,04 m). Use 0,04 m ou menos para um resultado confiável.`]);
+  const nlWarns: string[] = [];
+  if (scene.bars?.length && scene.h > 0.05) nlWarns.push(`Malha grossa (elemento de ${scene.h} m): a capacidade costuma ser SUPERESTIMADA (na S1, 0,1 m dá cerca de 50 % a mais que 0,04 m). Use 0,04 m ou menos para um resultado confiável.`);
+  if ((scene.fck ?? 30) > 50) nlWarns.push(`fck = ${scene.fck} MPa (> 50 MPa): εc2 = 2,0 ‰ e εcu = 3,5 ‰ adotados valem apenas para fck ≤ 50 MPa.`);
+  const actCode = activeCode();
+  if (scene.nl?.values === "design" && actCode.epsUd != null && scene.bars?.some((b) => b.epsU > actCode.epsUd! + 1e-9))
+    nlWarns.push(`Atenção (${actCode.short}): as barras usam εu da classe (p. ex. 50 ‰), acima de εud = ${(actCode.epsUd * 1000).toFixed(1)} ‰ da norma.`);
+  if (nlWarns.length) showMsg([], nlWarns);
   $("nl").textContent = "Parar";
   send({ mode: "nl", scene });
 };
@@ -1031,9 +1052,9 @@ $("run").onclick = () => {
 $("elastic").onclick = () => { frames.length = 0; slider.max = "0"; $("msg").innerHTML = ""; send({ mode: "elastic", scene }); };
 $("clearRes").onclick = () => { clearFrames(); $("stats").textContent = ""; $("msg").innerHTML = ""; draw(); };
 $("clearAll").onclick = () => {
-  if (!confirm(geomLocked ? "Limpar aberturas, apoios, forças e resultados (a geometria principal travada é mantida)?" : "Limpar tudo (geometria, apoios, forças e resultados)?")) return;
-  scene = { ...scene, shapes: geomLocked ? scene.shapes.filter((s) => s.mode === "add") : [], loads: [], supports: [] }; sel = null; if (!geomLocked) presetSel.value = "custom";
-  changed(); renderProps();
+  if (!confirm(geomLocked ? "Limpar aberturas, apoios, forças e resultados (a geometria principal travada e as armaduras são mantidas)?" : "Limpar tudo (geometria, armaduras, apoios, forças e resultados)?")) return;
+  scene = { ...scene, shapes: geomLocked ? scene.shapes.filter((s) => s.mode === "add") : [], loads: [], supports: [], bars: geomLocked ? scene.bars : [] }; sel = null; if (!geomLocked) presetSel.value = "custom";
+  changed(); renderProps(); renderBars();
 };
 $<HTMLInputElement>("vf").oninput = (e) => ($("vfv").textContent = (e.target as HTMLInputElement).value);
 $<HTMLInputElement>("rmin").oninput = (e) => ($("rv").textContent = (e.target as HTMLInputElement).value);
@@ -1059,7 +1080,8 @@ $<HTMLInputElement>("bearing").onchange = (e) => {
 $<HTMLInputElement>("fck").onchange = (e) => {
   const el = e.target as HTMLInputElement, v = clampFck(+el.value);
   if (+el.value < FCK_MIN) toast(`fck mínimo: ${FCK_MIN} MPa.`);
-  el.value = String(v); scene.fck = v; changed(false);
+  else if (v > 50) toast("Atenção: fck > 50 MPa — εc2 = 2,0 ‰ e εcu = 3,5 ‰ do programa valem apenas para fck ≤ 50 MPa.");
+  el.value = String(v); scene.fck = v; changed(frames.some((f) => !!f.nl));
 };
 $<HTMLInputElement>("thick").onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { scene.t = v; changed(); } };
 /** largura mínima da biela (Borges 2022) → raio do filtro */

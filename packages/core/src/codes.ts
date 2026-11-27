@@ -56,10 +56,17 @@ export const DESIGN_CODES: Record<DesignCodeId, DesignCode> = {
     id: "NBR6118", name: "ABNT NBR 6118", short: "NBR 6118",
     gammaC: 1.4, alphaCc: 0.85, epsC0: 0.002, epsCu: 0.0035, etaFc: () => 1, gammaS: 1.15, epsUd: 0.01, strut: null,
     steelClasses: ["CA50", "CA60"],
-    fields: { gammaC: true, alphaCc: true, epsC0: true, epsCu: true, gammaS: true, epsUd: true, strut: true, steel: false },
+    fields: { gammaC: "sec", alphaCc: false, epsC0: false, epsCu: false, gammaS: "sec", epsUd: false, strut: "sec", steel: false },
     status: {
-      verificado: ["γc = 1,4 e αcc = 0,85 (Borges, 2022)", "εc2 = 2 ‰ e εcu = 3,5 ‰ (fck ≤ 50 MPa)", "γs = 1,15", "εud = 10 ‰", "resistência de biela σRd,máx = (1 − fck/250)·fcd (Borges, 2022)"],
-      pendente: ["fatores fcd1/fcd2/fcd3 de bielas e nós (conferir a ordem na norma)", "limites para fck > 50 MPa", "ft/fy e εu das classes CA-50 e CA-60 (NBR 7480): os valores usados coincidem com os mínimos das classes B e A do MC2010 (Bol. 65, p. 183), mas a NBR 7480 não foi conferida"],
+      verificado: [
+        "fonte SECUNDÁRIA (Borges, 2022 — NBR 6118:2014, §2.4 e §7.1.5; texto integral da NBR 6118:2023 não está disponível localmente): γc = 1,4, γs = 1,15 e resistência de biela σRd,máx = (1 − fck/250)·0,85·fck/γc (Eqs. 7.27–7.28)",
+      ],
+      pendente: [
+        "conferência direta no texto integral da ABNT NBR 6118:2023: αcc = 0,85, εc2 = 2 ‰, εcu = 3,5 ‰ (fck ≤ 50 MPa) e εud = 10 ‰ (não constam em Borges, 2022)",
+        "fatores fcd1 = 0,85·αv2·fcd (CCC), fcd2 = 0,60·αv2·fcd (CTT/TTT), fcd3 = 0,72·αv2·fcd (CCT) e γn (item 22.3.2 da NBR 6118:2014 em Borges, 2022; confirmar na NBR 6118:2023 e implementar)",
+        "limites para fck > 50 MPa",
+        "ft/fy e εu das classes CA-50 e CA-60 (ABNT NBR 7480): os valores usados coincidem com os mínimos das classes B e A do MC2010 (Bol. 65, p. 183), mas a NBR 7480 não foi conferida",
+      ],
     },
   },
   EC2: {
@@ -94,10 +101,10 @@ export const DESIGN_CODES: Record<DesignCodeId, DesignCode> = {
     id: "ACI318", name: "ACI 318 (bielas e tirantes)", short: "ACI 318",
     gammaC: 1.0, alphaCc: 0.85, epsC0: 0.002, epsCu: 0.003, etaFc: () => 1, gammaS: 1.0, epsUd: null, strut: null, phi: 0.75,
     steelClasses: [],
-    fields: { gammaC: false, alphaCc: false, epsC0: false, epsCu: true, gammaS: false, epsUd: false, strut: false, steel: false },
+    fields: { gammaC: false, alphaCc: false, epsC0: false, epsCu: "sec", gammaS: false, epsUd: false, strut: false, steel: false },
     status: {
-      verificado: ["εcu = 3,0 ‰", "φ = 0,75 para bielas e tirantes (também em fonte secundária: apresentação do ACI sobre o ACI 318-19)", "ângulo mínimo de 25° entre bielas e tirantes (ACI 318-14, citado no livro do CSFM, p. 14)"],
-      pendente: ["fatores βs e βn de bielas e nós (Cap. 23; fontes secundárias citam βs = 1,0/0,75 e βn = 0,80 CCT/0,60 CTT, ainda sem conferir)", "resistências a partir de f′c (fce = 0,85·βs·f′c)", "classes de aço (Grade 60) e εud/ductilidade"],
+      verificado: ["fonte SECUNDÁRIA (texto integral do ACI 318-14/19 não disponível localmente): εcu = 3,0 ‰, φ = 0,75 para bielas e tirantes (Borges, 2022 §2.6 / apresentação ACI 318-19) e ângulo mínimo de 25° entre bielas e tirantes (livro do CSFM, p. 14)"],
+      pendente: ["conferência direta no texto integral do ACI 318-19 (Cap. 23)", "fatores βs e βn de bielas e nós (Cap. 23; fontes secundárias citam βs = 1,0/0,75 e βn = 0,80 CCT/0,60 CTT, ainda sem conferir)", "resistências a partir de f′c (fce = 0,85·βs·f′c) e aplicação de φ = 0,75", "classes de aço (Grade 60) e εud/ductilidade"],
     },
   },
 };
@@ -115,7 +122,7 @@ export const fcdOfCode = (code: DesignCode, fckMPa: number) => (code.alphaCc * f
  * e avisa (`fallback`).
  */
 export function strutDesignStrength(code: DesignCode, fckMPa: number): { sigma: number; formula: string; verified: Ver; fallback: boolean } {
-  if (code.id === "NBR6118") return { sigma: sigmaRdMax(fckMPa), formula: "(1 − fck/250)·0,85·fck/γc (Borges, 2022)", verified: true, fallback: false };
+  if (code.id === "NBR6118") return { sigma: sigmaRdMax(fckMPa), formula: "(1 − fck/250)·0,85·fck/γc (Borges, 2022)", verified: "sec", fallback: false };
   if (code.strut) {
     const k = code.strut.uniaxial(fckMPa);
     return { sigma: k * fcdOfCode(code, fckMPa), formula: `${k.toFixed(2).replace(".", ",")} · fcd (Tab. 2.1 do livro do CSFM)`, verified: combine(code.fields.gammaC, code.fields.alphaCc), fallback: false };

@@ -216,7 +216,7 @@ export function solvePCG(
  * robusto ao contraste 1e-9 entre sólido e vazio (onde o PCG-Jacobi precisa de milhares
  * de iterações).
  */
-export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float64Array): void {
+export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float64Array): boolean {
   const { ndof, nel, edof, KE, isFixed, f } = m;
   const bw = 2 * nely + 5;
   const w = bw + 1;
@@ -233,14 +233,16 @@ export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float
       }
     }
   }
-  solveBandedAssembled(L, ndof, bw, isFixed, f, u);
+  return solveBandedAssembled(L, ndof, bw, isFixed, f, u);
 }
 
 /**
  * Fatora (Cholesky em banda) e resolve uma matriz já montada: `L[i*(bw+1) + (bw-(i-j))]` guarda A[i][j], j ≤ i.
  * GDLs restringidos (`isFixed`) viram identidade e recebem u = 0. A matriz `L` é sobrescrita.
+ * Retorna `true` se todos os pivôs forem positivos e finitos (> 1e-30); caso contrário, retorna `false` sem mascarar
+ * singularidade ou perda de positividade definida.
  */
-export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, isFixed: Uint8Array, f: Float64Array, u: Float64Array): void {
+export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, isFixed: Uint8Array, f: Float64Array, u: Float64Array): boolean {
   const w = bw + 1;
   for (let i = 0; i < ndof; i++) if (isFixed[i]) L[i * w + bw] = 1;
   // fatoração L Lᵀ
@@ -251,8 +253,10 @@ export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, 
       const k0 = Math.max(j0, j - bw);
       const bi = i * w + bw - i, bj = j * w + bw - j;
       for (let k = k0; k < j; k++) s -= L[bi + k] * L[bj + k];
-      if (j === i) L[i * w + bw] = Math.sqrt(Math.max(s, 1e-30));
-      else L[i * w + (bw - (i - j))] = s / L[j * w + bw];
+      if (j === i) {
+        if (!(s > 1e-30)) return false;
+        L[i * w + bw] = Math.sqrt(s);
+      } else L[i * w + (bw - (i - j))] = s / L[j * w + bw];
     }
   }
   // substituições
@@ -269,6 +273,7 @@ export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, 
     for (let j = i + 1; j <= jEnd; j++) s -= L[j * w + (bw - (j - i))] * u[j];
     u[i] = s / L[i * w + bw];
   }
+  return true;
 }
 
 export interface Reaction { id: string; rx: number; ry: number; x: number; y: number }
