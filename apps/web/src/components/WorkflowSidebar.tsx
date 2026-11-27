@@ -18,7 +18,7 @@ import {
   supportFlags,
   supportKind,
 } from "@stm/core";
-import type { BenchmarkEntry, DesignCodeId, Scene, SupportKind } from "@stm/core";
+import type { BenchmarkEntry, DesignCodeId, Scene, StmModel, SupportKind } from "@stm/core";
 import {
   Activity,
   Box,
@@ -66,9 +66,12 @@ interface WorkflowSidebarProps {
   onRminAutoChange: (v: boolean) => void;
   // execução
   runningMode: "opt" | "nl" | null;
+  runningStm: boolean;
   onRunElastic: () => void;
   onRunCsfmLinear: () => void;
   onRunOpt: () => void;
+  onRunStm: () => void;
+  onConvertStmTies: () => void;
   onRunNl: () => void;
   onStop: () => void;
   onClearResults: () => void;
@@ -76,6 +79,7 @@ interface WorkflowSidebarProps {
   // estado atual
   frame: FrameMsg | null;
   csfm: CsfmSummary | null;
+  stm: StmModel | null;
   benchmark: BenchmarkEntry | null;
   onToast: (msg: string) => void;
 }
@@ -88,8 +92,8 @@ export const WorkflowSidebar: React.FC<WorkflowSidebarProps> = (props) => {
     sel, onSelChange, geomLocked, supportKindDefault, onSupportKindDefaultChange,
     rebarCfg, onRebarCfgChange, tool, onToolChange, hoverBarId, onHoverBarChange, nextId,
     optMethod, onOptMethodChange, volfrac, onVolfracChange, rmin, onRminChange, rminAuto, onRminAutoChange,
-    runningMode, onRunElastic, onRunCsfmLinear, onRunOpt, onRunNl, onStop, onClearResults, onClearAll,
-    frame, csfm, benchmark, onToast,
+    runningMode, runningStm, onRunElastic, onRunCsfmLinear, onRunOpt, onRunStm, onConvertStmTies, onRunNl, onStop, onClearResults, onClearAll,
+    frame, csfm, stm, benchmark, onToast,
   } = props;
 
   const code = codeById(codeId);
@@ -569,6 +573,57 @@ export const WorkflowSidebar: React.FC<WorkflowSidebarProps> = (props) => {
               {runningMode === "opt" ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
               <span>{runningMode === "opt" ? "Parar otimização" : "Otimizar topologia"}</span>
             </button>
+
+            <div className="pt-2 border-t border-slate-200 space-y-2">
+              <h2 className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
+                Modelo de Bielas e Tirantes (STM)
+              </h2>
+              <button
+                type="button"
+                disabled={runningStm || runningMode !== null}
+                onClick={onRunStm}
+                className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-xs transition-colors"
+              >
+                <Activity className="w-4 h-4" />
+                <span>{runningStm ? "Extraindo STM…" : "Extrair e verificar STM"}</span>
+              </button>
+              <p className="text-[10.5px] text-slate-500 leading-snug">
+                Usa a topologia otimizada atual (se disponível) ou o domínio cheio para extrair treliça em equilíbrio e verificar bielas, tirantes e nós.
+              </p>
+
+              {stm && (
+                <div className={`p-2.5 rounded-lg border space-y-2 text-[11px] ${
+                  stm.ok ? "bg-emerald-50/70 border-emerald-200" : "bg-red-50/70 border-red-200"
+                }`}>
+                  <div className="flex items-center justify-between font-semibold">
+                    <span className={stm.ok ? "text-emerald-900" : "text-red-900"}>
+                      STM {stm.ok ? "Aprovado" : "Reprovado"} · {stm.codeId}
+                    </span>
+                    <span className="font-mono-tech text-[10.5px] text-slate-700">
+                      STS = {(stm.sts * 100).toFixed(1)} %
+                    </span>
+                  </div>
+                  <div className="font-mono-tech text-slate-700 space-y-0.5">
+                    <div>ΣAs,req = <strong>{stm.totalAsReqCm2.toFixed(2)} cm²</strong> ({stm.steelClass})</div>
+                    <div>Máx. util.: biela {(stm.maxStrutUtil * 100).toFixed(0)} % · nó {(stm.maxNodeUtil * 100).toFixed(0)} %</div>
+                    <div>Resíduo nodal: {stm.residual.toExponential(1)} kN</div>
+                  </div>
+                  {stm.nodeLimitsVerified === "sec" && (
+                    <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      Nota: limites nodais fcd1/fcd2/fcd3 de fonte secundária (Borges, 2022).
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onConvertStmTies}
+                    className="w-full py-1.5 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Converter tirantes em barras (Nível 2)</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {benchmark && (benchmark.category === "opt" || benchmark.category === "stm") && (
               <div className="p-3 rounded-lg bg-teal-50/70 border border-teal-200 space-y-1.5 text-[11px]">

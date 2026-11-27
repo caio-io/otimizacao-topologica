@@ -5,6 +5,7 @@ import {
   buildModel,
   buildProblem,
   concreteFromScene,
+  extractStm,
   principalStresses,
   simp,
   solveDisplacements,
@@ -13,13 +14,14 @@ import {
   supportReactions,
   xiaIndices,
 } from "@stm/core";
-import type { NlCurvePoint, NlStep, Scene } from "@stm/core";
+import type { DesignCodeId, NlCurvePoint, NlStep, Scene, StmSteelClass } from "@stm/core";
 
 export type WorkerIn =
   | { token: number; mode: "opt"; scene: Scene; method: "beso" | "simp"; volfrac: number; rmin: number }
   | { token: number; mode: "elastic"; scene: Scene }
   | { token: number; mode: "nl"; scene: Scene }
   | { token: number; mode: "metrics"; scene: Scene; rho: Float64Array }
+  | { token: number; mode: "stm"; scene: Scene; rho?: Float64Array; codeId?: DesignCodeId; steelClass?: StmSteelClass }
   | { stop: true };
 
 let stopFlag = false;
@@ -31,6 +33,20 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
   if ("stop" in d) { stopFlag = true; return; }
   const token = (runToken = d.token);
   stopFlag = false;
+  if (d.mode === "stm") {
+    try {
+      const stm = extractStm(d.scene, {
+        rho: d.rho,
+        codeId: d.codeId ?? d.scene.nl?.code,
+        steelClass: d.steelClass,
+      });
+      post({ kind: "stm", token, stm });
+    } catch (err) {
+      post({ kind: "error", token, errors: [String((err as Error).message ?? err)], warnings: [] });
+    }
+    return;
+  }
+
   const r = buildProblem(d.scene);
   if (!r.problem) { post({ kind: "error", token, errors: r.errors, warnings: r.warnings }); return; }
   const problem = r.problem;

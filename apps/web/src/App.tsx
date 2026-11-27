@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CSFM_DEFAULTS, buildProblem, cappedAutoFilterRadius, codeById, strutDesignStrength, tensionZones } from "@stm/core";
-import type { DesignCodeId, Scene, SupportKind, XiaIndices } from "@stm/core";
+import { CSFM_DEFAULTS, buildProblem, cappedAutoFilterRadius, codeById, stmTiesToBarSpecs, strutDesignStrength, tensionZones } from "@stm/core";
+import type { DesignCodeId, Scene, StmModel, SupportKind, XiaIndices } from "@stm/core";
 import { HeaderBar } from "./components/HeaderBar";
 import { ReportModal } from "./components/ReportModal";
 import { ResultsDock } from "./components/ResultsDock";
@@ -45,6 +45,8 @@ export const App: React.FC = () => {
   const [showMesh, setShowMesh] = useState(false);
   const [csfm, setCsfm] = useState<CsfmSummary | null>(null);
   const [runningMode, setRunningMode] = useState<"opt" | "nl" | null>(null);
+  const [stm, setStm] = useState<StmModel | null>(null);
+  const [runningStm, setRunningStm] = useState(false);
   const [xiaMetrics, setXiaMetrics] = useState<{ steelVolCm3: number; xia: XiaIndices } | null>(null);
   const [computingXia, setComputingXia] = useState(false);
 
@@ -87,7 +89,15 @@ export const App: React.FC = () => {
         setErrors(m.errors);
         setWarnings(m.warnings);
         setRunningMode(null);
+        setRunningStm(false);
         setComputingXia(false);
+        return;
+      }
+      if (m.kind === "stm") {
+        setStm(m.stm);
+        setRunningStm(false);
+        setViewMode("stm");
+        if (m.stm.warnings.length) setWarnings(m.stm.warnings);
         return;
       }
       if (m.kind === "metrics") {
@@ -122,10 +132,12 @@ export const App: React.FC = () => {
     tokenRef.current++;
     workerRef.current?.postMessage({ stop: true });
     setRunningMode(null);
+    setRunningStm(false);
     setComputingXia(false);
     setFrames([]);
     setFrameIndex(0);
     setCsfm(null);
+    setStm(null);
     setXiaMetrics(null);
     setErrors([]);
     setWarnings([]);
@@ -225,6 +237,37 @@ export const App: React.FC = () => {
     setRunningMode("opt");
     setViewMode("topo");
     sendWorker({ mode: "opt", scene, method: optMethod, volfrac, rmin: effRmin });
+  };
+
+  const handleRunStm = () => {
+    setRunningStm(true);
+    setErrors([]);
+    setWarnings([]);
+    sendWorker({
+      mode: "stm",
+      scene,
+      rho: lastFrame && !lastFrame.elastic && !lastFrame.nl ? lastFrame.rho : undefined,
+      codeId,
+      steelClass: rebarCfg.steel,
+    });
+  };
+
+  const handleConvertStmTies = () => {
+    if (!stm) return;
+    const newBars = stmTiesToBarSpecs(stm, rebarCfg.steel).map((b) => ({
+      ...b,
+      id: nextId("B"),
+    }));
+    if (!newBars.length) {
+      showToast("Nenhum tirante encontrado no STM para converter.");
+      return;
+    }
+    handleSceneChange(
+      (prev) => ({ ...prev, bars: [...(prev.bars ?? []), ...newBars] }),
+      false,
+    );
+    setTab("nl");
+    showToast(`${newBars.length} tirante(s) convertido(s) em barras para o Nível 2.`);
   };
 
   const handleRunNl = () => {
@@ -344,15 +387,19 @@ export const App: React.FC = () => {
           rminAuto={rminAuto}
           onRminAutoChange={setRminAuto}
           runningMode={runningMode}
+          runningStm={runningStm}
           onRunElastic={handleRunElastic}
           onRunCsfmLinear={handleRunCsfmLinear}
           onRunOpt={handleRunOpt}
+          onRunStm={handleRunStm}
+          onConvertStmTies={handleConvertStmTies}
           onRunNl={handleRunNl}
           onStop={handleStop}
           onClearResults={clearResults}
           onClearAll={handleClearAll}
           frame={currentFrame}
           csfm={csfm}
+          stm={stm}
           benchmark={benchmark}
           onToast={showToast}
         />
@@ -371,6 +418,7 @@ export const App: React.FC = () => {
             showMesh={showMesh}
             onShowMeshChange={setShowMesh}
             csfm={csfm}
+            stm={stm}
             tool={tool}
             onToolChange={setTool}
             sel={sel}
@@ -396,6 +444,8 @@ export const App: React.FC = () => {
             xiaMetrics={xiaMetrics}
             onComputeXia={handleComputeXia}
             computingXia={computingXia}
+            stm={stm}
+            viewMode={viewMode}
           />
         </main>
       </div>
@@ -431,6 +481,7 @@ export const App: React.FC = () => {
         modelTitle={activeModel?.label ?? "Modelo Personalizado"}
         benchmark={benchmark}
         frame={lastFrame}
+        stm={stm}
         snapshotPng={reportPng}
       />
     </div>

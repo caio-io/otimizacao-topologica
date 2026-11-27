@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import type { BenchmarkEntry, XiaIndices } from "@stm/core";
+import type { BenchmarkEntry, StmModel, XiaIndices } from "@stm/core";
 import { Activity, BarChart3, ChevronDown, ChevronUp, Scale, Target } from "lucide-react";
-import type { FrameMsg } from "../types/app";
+import type { FrameMsg, ViewMode } from "../types/app";
 import { LoadDispChart } from "./LoadDispChart";
 
 interface ResultsDockProps {
@@ -13,6 +13,8 @@ interface ResultsDockProps {
   xiaMetrics: { steelVolCm3: number; xia: XiaIndices } | null;
   onComputeXia: () => void;
   computingXia: boolean;
+  stm: StmModel | null;
+  viewMode: ViewMode;
 }
 
 const MODES_PT: Record<string, string> = {
@@ -50,10 +52,13 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
   xiaMetrics,
   onComputeXia,
   computingXia,
+  stm,
+  viewMode,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
 
   const nl = frame?.nl;
+  const showStm = !!stm && !nl && (!frame || viewMode === "stm");
   const nlFinal = lastFrame?.nl;
   const P0 = frame?.P0 ?? 0;
   const P = nl ? nl.lambda * P0 : 0;
@@ -88,13 +93,21 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
               <span className="text-slate-500">{MODES_PT[nl.mode ?? ""] ?? "calculando…"}</span>
             </span>
           )}
-          {!nl && frame && !frame.elastic && (
+          {!nl && frame && !frame.elastic && !showStm && (
             <span className="font-mono-tech text-[11px] text-slate-700">
               Iter {frame.iter} · Vol {(frame.volume * 100).toFixed(1)} % · C = {frame.compliance.toExponential(2)}
               {frame.steelVolCm3 != null ? ` · Aço ≈ ${frame.steelVolCm3.toFixed(0)} cm³` : ""}
             </span>
           )}
-          {!nl && frame?.elastic && (
+          {showStm && stm && (
+            <span className="font-mono-tech text-[11px] text-slate-700 truncate">
+              <strong>STM {stm.ok ? "OK" : "REPROVADO"}</strong> · STS = {(stm.sts * 100).toFixed(1)} % ·{" "}
+              {stm.members.filter((m) => m.kind === "strut").length} bielas ·{" "}
+              {stm.members.filter((m) => m.kind === "tie").length} tirantes · ΣAs = {stm.totalAsReqCm2.toFixed(2)} cm² ·{" "}
+              resíduo = {stm.residual.toExponential(1)} kN
+            </span>
+          )}
+          {!nl && frame?.elastic && !showStm && (
             <span className="text-[11px] text-slate-600">Campo elástico linear do domínio cheio</span>
           )}
         </div>
@@ -110,7 +123,7 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
 
       {!collapsed && (
         <div className="p-2.5 max-h-56 overflow-y-auto">
-          {!frame ? (
+          {!frame && !stm ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
               <div className="text-xs text-slate-500 py-2">
                 Nenhuma análise executada ainda. Use <strong>Rodar análise não linear (Nível 2)</strong>,{" "}
@@ -247,7 +260,109 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
                 )}
               </div>
             </div>
-          ) : (
+          ) : showStm && stm ? (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5">
+              {/* Resumo STM + STS */}
+              <div className="lg:col-span-3 bg-white border border-slate-200 rounded-md p-2.5 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-700">Verificação STM ({stm.codeId})</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                    stm.ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                  }`}>
+                    {stm.ok ? "APROVADO" : "REPROVADO"}
+                  </span>
+                </div>
+                <dl className="grid grid-cols-2 gap-y-0.5 font-mono-tech text-[11px]">
+                  <dt className="text-slate-500 font-sans">Índice STS (Xia)</dt>
+                  <dd className="text-right font-bold">{(stm.sts * 100).toFixed(1)} %</dd>
+                  <dt className="text-slate-500 font-sans">Resíduo nodal</dt>
+                  <dd className="text-right">{stm.residual.toExponential(1)} kN</dd>
+                  <dt className="text-slate-500 font-sans">ΣAs,req ({stm.steelClass})</dt>
+                  <dd className="text-right font-bold">{stm.totalAsReqCm2.toFixed(2)} cm²</dd>
+                  <dt className="text-slate-500 font-sans">Máx. util. biela</dt>
+                  <dd className="text-right">{(stm.maxStrutUtil * 100).toFixed(0)} %</dd>
+                  <dt className="text-slate-500 font-sans">Máx. util. nó</dt>
+                  <dd className="text-right">{(stm.maxNodeUtil * 100).toFixed(0)} %</dd>
+                  <dt className="text-slate-500 font-sans">Ângulo mín. norma</dt>
+                  <dd className="text-right">{stm.minAngleLimitDeg.toFixed(1)}°</dd>
+                </dl>
+                {stm.nodeLimitsVerified === "sec" && (
+                  <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    Limites nodais fcd1/fcd2/fcd3 de fonte secundária (Borges, 2022).
+                  </div>
+                )}
+              </div>
+
+              {/* Tabela de Membros do STM */}
+              <div className="lg:col-span-5 bg-white border border-slate-200 rounded-md p-2 max-h-44 overflow-y-auto">
+                <div className="text-[10.5px] font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                  Membros do STM ({stm.members.length})
+                </div>
+                <table className="w-full text-[11px] font-mono-tech">
+                  <thead>
+                    <tr className="text-slate-500 border-b border-slate-200">
+                      <th className="text-left py-0.5 font-sans">ID</th>
+                      <th className="text-left py-0.5 font-sans">Tipo</th>
+                      <th className="text-right py-0.5">N (kN)</th>
+                      <th className="text-right py-0.5">As,req / σ/σRd</th>
+                      <th className="text-right py-0.5">Util.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stm.members.map((m) => (
+                      <tr key={m.id} className="border-b border-slate-100 last:border-0">
+                        <td className="text-left py-0.5">M{m.id} ({m.n1}–{m.n2})</td>
+                        <td className={`text-left py-0.5 font-sans font-semibold ${m.kind === "tie" ? "text-red-700" : "text-blue-700"}`}>
+                          {m.kind === "tie" ? "Tirante" : "Biela"}
+                        </td>
+                        <td className="text-right py-0.5">{m.N.toFixed(1)}</td>
+                        <td className="text-right py-0.5">
+                          {m.kind === "tie"
+                            ? `${m.AsReqCm2.toFixed(2)} cm²`
+                            : `${m.sigmaMPa.toFixed(1)}/${m.sigmaLimitMPa.toFixed(1)} MPa`}
+                        </td>
+                        <td className={`text-right py-0.5 font-semibold ${m.ok ? "text-emerald-700" : "text-red-700"}`}>
+                          {(m.utilization * 100).toFixed(0)} %
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Tabela de Nós do STM */}
+              <div className="lg:col-span-4 bg-white border border-slate-200 rounded-md p-2 max-h-44 overflow-y-auto">
+                <div className="text-[10.5px] font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                  Nós do STM ({stm.nodes.length})
+                </div>
+                <table className="w-full text-[11px] font-mono-tech">
+                  <thead>
+                    <tr className="text-slate-500 border-b border-slate-200">
+                      <th className="text-left py-0.5 font-sans">Nó</th>
+                      <th className="text-left py-0.5 font-sans">Classe</th>
+                      <th className="text-right py-0.5">Util.</th>
+                      <th className="text-right py-0.5">Ângulo mín.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stm.nodes.map((n) => (
+                      <tr key={n.id} className="border-b border-slate-100 last:border-0">
+                        <td className="text-left py-0.5">N{n.id}</td>
+                        <td className="text-left py-0.5 font-sans font-semibold text-slate-700">{n.kind}</td>
+                        <td className={`text-right py-0.5 font-semibold ${n.ok ? "text-emerald-700" : "text-red-700"}`}>
+                          {(n.utilization * 100).toFixed(0)} %
+                        </td>
+                        <td className={`text-right py-0.5 ${n.angleOk ? "text-slate-600" : "text-red-700 font-semibold"}`}>
+                          {n.minAngleDeg != null ? `${n.minAngleDeg.toFixed(1)}°` : "—"}
+                          {!n.angleOk ? " ⚠" : ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : frame ? (
             /* Resultados de Otimização / Elástico */
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5">
               <div className="lg:col-span-4 bg-white border border-slate-200 rounded-md p-2.5 text-xs space-y-1">
@@ -318,7 +433,7 @@ export const ResultsDock: React.FC<ResultsDockProps> = ({
                 </div>
               )}
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

@@ -7,7 +7,7 @@ import {
   sceneVertices,
   supportKind,
 } from "@stm/core";
-import type { LoadSpec, Scene, SupportSpec } from "@stm/core";
+import type { LoadSpec, Scene, StmModel, SupportSpec } from "@stm/core";
 import type { CsfmSummary, FrameMsg, RebarToolConfig, Selection, Tool, ViewMode } from "../types/app";
 
 export interface ViewportTransform {
@@ -277,6 +277,17 @@ function drawResult(
     return;
   }
 
+  if (mode === "stm") {
+    for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
+      const e = i * nely + j;
+      if (m.mask[e] === 0) continue;
+      const g = m.elastic ? 242 : Math.round(248 - 32 * m.rho[e]);
+      ctx.fillStyle = `rgb(${g},${g + 2},${Math.min(255, g + 5)})`;
+      ctx.fillRect(X(i), Y(j), px + 0.6, px + 0.6);
+    }
+    return;
+  }
+
   if (mode === "topo") {
     for (let i = 0; i < nelx; i++) for (let j = 0; j < nely; j++) {
       const e = i * nely + j;
@@ -463,6 +474,71 @@ function drawReactions(ctx: CanvasRenderingContext2D, v: ViewportTransform, m: F
   ctx.restore();
 }
 
+function drawStm(ctx: CanvasRenderingContext2D, v: ViewportTransform, stm: StmModel) {
+  if (!stm.nodes.length || !stm.members.length) return;
+  const nodeMap = new Map(stm.nodes.map((n) => [n.id, n]));
+  const maxN = Math.max(1e-6, ...stm.members.map((m) => Math.abs(m.N)));
+  ctx.save();
+  ctx.lineCap = "round";
+
+  for (const m of stm.members) {
+    const a = nodeMap.get(m.n1);
+    const b = nodeMap.get(m.n2);
+    if (!a || !b) continue;
+    const x0 = worldToScreenX(v, a.x), y0 = worldToScreenY(v, a.y);
+    const x1 = worldToScreenX(v, b.x), y1 = worldToScreenY(v, b.y);
+    const lw = 2 + 5.5 * (Math.abs(m.N) / maxN);
+
+    if (m.kind === "strut") {
+      ctx.setLineDash([7, 4]);
+      ctx.strokeStyle = m.ok ? "#1d4ed8" : "#b91c1c";
+      ctx.lineWidth = lw;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#dc2626";
+      ctx.lineWidth = lw;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+
+      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+      const lbl = `T = ${m.N.toFixed(0)} kN · As = ${m.AsReqCm2.toFixed(1)} cm²`;
+      ctx.font = "700 11px Inter, system-ui, sans-serif";
+      const tw = ctx.measureText(lbl).width;
+      ctx.fillStyle = "rgba(255,255,255,.92)";
+      ctx.fillRect(mx - tw / 2 - 4, my - 19, tw + 8, 16);
+      ctx.fillStyle = "#991b1b";
+      ctx.fillText(lbl, mx - tw / 2, my - 7);
+    }
+  }
+
+  ctx.setLineDash([]);
+  for (const n of stm.nodes) {
+    const nx = worldToScreenX(v, n.x), ny = worldToScreenY(v, n.y);
+    const ok = n.ok && n.angleOk;
+    ctx.fillStyle = ok ? "#16a34a" : "#dc2626";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(nx, ny, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const badge = `${n.kind} ${(n.utilization * 100).toFixed(0)}%`;
+    ctx.font = "700 10px Inter, system-ui, sans-serif";
+    const bw = ctx.measureText(badge).width;
+    const bx = nx + 9, by = ny - 9;
+    ctx.fillStyle = ok ? "rgba(220,252,231,.94)" : "rgba(254,226,226,.95)";
+    ctx.strokeStyle = ok ? "#86efac" : "#fca5a5";
+    ctx.lineWidth = 1;
+    ctx.fillRect(bx - 3, by - 10, bw + 6, 14);
+    ctx.strokeRect(bx - 3, by - 10, bw + 6, 14);
+    ctx.fillStyle = ok ? "#166534" : "#991b1b";
+    ctx.fillText(badge, bx, by);
+  }
+  ctx.restore();
+}
+
 export interface RenderCanvasArgs {
   ctx: CanvasRenderingContext2D;
   width: number;
@@ -473,6 +549,7 @@ export interface RenderCanvasArgs {
   viewMode: ViewMode;
   showMesh: boolean;
   csfm: CsfmSummary | null;
+  stm: StmModel | null;
   sel: Selection;
   hoverBarId: string | null;
   tool: Tool;
@@ -485,7 +562,7 @@ export interface RenderCanvasArgs {
 }
 
 export function renderViewport(args: RenderCanvasArgs) {
-  const { ctx, width, height, view, scene, frame, viewMode, showMesh, csfm, sel, hoverBarId, tool, hoverGrip, rebarPreview, rebarCfg, dragOverlay, polyDraft, hoverWorld } = args;
+  const { ctx, width, height, view, scene, frame, viewMode, showMesh, csfm, stm, sel, hoverBarId, tool, hoverGrip, rebarPreview, rebarCfg, dragOverlay, polyDraft, hoverWorld } = args;
   ctx.clearRect(0, 0, width, height);
   drawGrid(ctx, view, width, height);
 
@@ -515,6 +592,7 @@ export function renderViewport(args: RenderCanvasArgs) {
     }
   }
 
+  if (viewMode === "stm" && stm) drawStm(ctx, view, stm);
   drawBars(ctx, view, scene, frame, hoverBarId);
   for (const sp of scene.supports) drawSupport(ctx, view, scene, sp, sel?.kind === "support" && sel.id === sp.id);
   for (const ld of scene.loads) drawLoad(ctx, view, scene, ld, sel?.kind === "load" && sel.id === ld.id);
@@ -610,7 +688,47 @@ export function inspectHoverPoint(
   scene: Scene,
   frame: FrameMsg | null,
   viewMode: ViewMode,
+  stm: StmModel | null = null,
 ): { barId: string | null; lines: string[]; title?: string } | null {
+  if (viewMode === "stm" && stm) {
+    for (const n of stm.nodes) {
+      const d = Math.hypot(worldToScreenX(view, n.x) - px, worldToScreenY(view, n.y) - py);
+      if (d <= 11) {
+        return {
+          barId: null,
+          title: `Nó ${n.id} (${n.kind} · ${n.role})`,
+          lines: [
+            `σ = ${n.sigmaMPa.toFixed(2)} / ${n.sigmaLimitMPa.toFixed(2)} MPa · util. ${(n.utilization * 100).toFixed(0)} % (${n.ok ? "OK" : "REPROVADO"})`,
+            `Ângulo mín.: ${n.minAngleDeg != null ? `${n.minAngleDeg.toFixed(1)}°` : "—"} (${n.angleOk ? "OK" : "abaixo do mínimo"})`,
+          ],
+        };
+      }
+    }
+    const nodeMap = new Map(stm.nodes.map((n) => [n.id, n]));
+    for (const m of stm.members) {
+      const a = nodeMap.get(m.n1);
+      const b = nodeMap.get(m.n2);
+      if (!a || !b) continue;
+      const d = distSeg(
+        px, py,
+        worldToScreenX(view, a.x), worldToScreenY(view, a.y),
+        worldToScreenX(view, b.x), worldToScreenY(view, b.y),
+      );
+      if (d <= 9) {
+        return {
+          barId: null,
+          title: `${m.kind === "strut" ? "Biela" : "Tirante"} M${m.id} (Nó ${m.n1}–Nó ${m.n2})`,
+          lines: [
+            `N = ${m.N.toFixed(1)} kN · L = ${m.length.toFixed(2)} m · θ = ${m.angleDeg.toFixed(1)}°`,
+            m.kind === "tie"
+              ? `As,req = ${m.AsReqCm2.toFixed(2)} cm² · util. ${(m.utilization * 100).toFixed(0)} %`
+              : `σ = ${m.sigmaMPa.toFixed(2)} / ${m.sigmaLimitMPa.toFixed(2)} MPa · w = ${(m.wReqM * 100).toFixed(1)} cm · util. ${(m.utilization * 100).toFixed(0)} %`,
+          ],
+        };
+      }
+    }
+  }
+
   const bars = scene.bars ?? [];
   let best: { k: number; q: number; d: number } | null = null;
   bars.forEach((b, k) => {

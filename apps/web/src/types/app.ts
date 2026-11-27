@@ -5,6 +5,7 @@ import type {
   NlFailure,
   NlUtilization,
   PrincipalField,
+  StmModel,
   TensionZone,
   XiaIndices,
 } from "@stm/core";
@@ -28,6 +29,7 @@ export type ViewMode =
   | "s2"
   | "def"
   | "csfm"
+  | "stm"
   | "nlconc"
   | "nlcrack"
   | "nlstress"
@@ -94,6 +96,12 @@ export interface MetricsMsg {
   xia: XiaIndices;
 }
 
+export interface StmMsg {
+  kind: "stm";
+  token: number;
+  stm: StmModel;
+}
+
 export interface ErrorMsg {
   kind: "error";
   token: number;
@@ -101,7 +109,7 @@ export interface ErrorMsg {
   warnings: string[];
 }
 
-export type WorkerOut = FrameMsg | MetricsMsg | ErrorMsg;
+export type WorkerOut = FrameMsg | MetricsMsg | StmMsg | ErrorMsg;
 
 export interface CsfmSummary {
   zones: TensionZone[];

@@ -1,6 +1,6 @@
 import React from "react";
 import { codeById, fcdOfCode, strutDesignStrength } from "@stm/core";
-import type { BenchmarkEntry, DesignCodeId, Scene } from "@stm/core";
+import type { BenchmarkEntry, DesignCodeId, Scene, StmModel } from "@stm/core";
 import { Printer, X } from "lucide-react";
 import type { FrameMsg } from "../types/app";
 import { LoadDispChart } from "./LoadDispChart";
@@ -13,6 +13,7 @@ interface ReportModalProps {
   modelTitle: string;
   benchmark: BenchmarkEntry | null;
   frame: FrameMsg | null;
+  stm: StmModel | null;
   snapshotPng: string | null;
 }
 
@@ -24,6 +25,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   modelTitle,
   benchmark,
   frame,
+  stm,
   snapshotPng,
 }) => {
   if (!open) return null;
@@ -149,6 +151,82 @@ export const ReportModal: React.FC<ReportModalProps> = ({
               <div className="text-[11px] text-slate-700"><strong>Fonte:</strong> {benchmark.citation} ({benchmark.sourceFile})</div>
               <div className="text-[11px] text-slate-700"><strong>Publicado:</strong> {benchmark.reference.publishedNote}</div>
               {benchmark.reference.modelRangeNote && <div className="text-[11px] text-slate-600">{benchmark.reference.modelRangeNote}</div>}
+            </div>
+          )}
+
+          {/* Resumo STM */}
+          {stm && (
+            <div className="border border-slate-200 rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold uppercase text-[10.5px] tracking-wider text-slate-500">
+                  Verificação STM — Bielas, Tirantes e Nós ({stm.codeId})
+                </h3>
+                <span className={`px-2 py-0.5 rounded text-[10.5px] font-bold ${stm.ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+                  {stm.ok ? "APROVADO" : "REPROVADO"}
+                </span>
+              </div>
+              <dl className="grid grid-cols-3 gap-2 font-mono-tech text-[11px] bg-slate-50 p-2 rounded">
+                <div><span className="text-slate-500 font-sans">STS (Xia):</span> <strong>{(stm.sts * 100).toFixed(1)} %</strong></div>
+                <div><span className="text-slate-500 font-sans">Resíduo nodal:</span> <strong>{stm.residual.toExponential(1)} kN</strong></div>
+                <div><span className="text-slate-500 font-sans">ΣAs,req ({stm.steelClass}):</span> <strong>{stm.totalAsReqCm2.toFixed(2)} cm²</strong></div>
+                <div><span className="text-slate-500 font-sans">fcd1 / fcd2 / fcd3:</span> <strong>{stm.fcd1MPa.toFixed(1)} / {stm.fcd2MPa.toFixed(1)} / {stm.fcd3MPa.toFixed(1)} MPa</strong></div>
+                <div><span className="text-slate-500 font-sans">Máx. util. biela:</span> <strong>{(stm.maxStrutUtil * 100).toFixed(0)} %</strong></div>
+                <div><span className="text-slate-500 font-sans">Máx. util. nó:</span> <strong>{(stm.maxNodeUtil * 100).toFixed(0)} %</strong></div>
+              </dl>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="font-semibold text-[11px] text-slate-700 mb-1">Membros ({stm.members.length})</div>
+                  <table className="w-full text-[10.5px] font-mono-tech">
+                    <thead>
+                      <tr className="border-b border-slate-300 text-slate-600">
+                        <th className="text-left py-0.5 font-sans">ID</th>
+                        <th className="text-left py-0.5 font-sans">Tipo</th>
+                        <th className="text-right py-0.5">N (kN)</th>
+                        <th className="text-right py-0.5">As / σ</th>
+                        <th className="text-right py-0.5">Util.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stm.members.map((m) => (
+                        <tr key={m.id} className="border-b border-slate-100">
+                          <td className="py-0.5">M{m.id}</td>
+                          <td className="py-0.5 font-sans">{m.kind === "tie" ? "Tirante" : "Biela"}</td>
+                          <td className="text-right py-0.5">{m.N.toFixed(1)}</td>
+                          <td className="text-right py-0.5">
+                            {m.kind === "tie" ? `${m.AsReqCm2.toFixed(2)} cm²` : `${m.sigmaMPa.toFixed(1)} MPa`}
+                          </td>
+                          <td className="text-right py-0.5">{(m.utilization * 100).toFixed(0)} %</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <div className="font-semibold text-[11px] text-slate-700 mb-1">Nós ({stm.nodes.length})</div>
+                  <table className="w-full text-[10.5px] font-mono-tech">
+                    <thead>
+                      <tr className="border-b border-slate-300 text-slate-600">
+                        <th className="text-left py-0.5 font-sans">Nó</th>
+                        <th className="text-left py-0.5 font-sans">Classe</th>
+                        <th className="text-right py-0.5">σ / lim (MPa)</th>
+                        <th className="text-right py-0.5">Util.</th>
+                        <th className="text-right py-0.5">Âng.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stm.nodes.map((n) => (
+                        <tr key={n.id} className="border-b border-slate-100">
+                          <td className="py-0.5">N{n.id}</td>
+                          <td className="py-0.5 font-sans">{n.kind}</td>
+                          <td className="text-right py-0.5">{n.sigmaMPa.toFixed(1)}/{n.sigmaLimitMPa.toFixed(1)}</td>
+                          <td className="text-right py-0.5">{(n.utilization * 100).toFixed(0)} %</td>
+                          <td className="text-right py-0.5">{n.minAngleDeg != null ? `${n.minAngleDeg.toFixed(0)}°` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 

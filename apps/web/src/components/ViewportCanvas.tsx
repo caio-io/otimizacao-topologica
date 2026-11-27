@@ -11,7 +11,7 @@ import {
   smartBarPath,
   supportFlags,
 } from "@stm/core";
-import type { LoadSpec, Scene, Shape, SupportKind, SupportSpec } from "@stm/core";
+import type { LoadSpec, Scene, Shape, StmModel, SupportKind, SupportSpec } from "@stm/core";
 import {
   ArrowDown,
   ArrowDownToLine,
@@ -55,6 +55,7 @@ interface ViewportCanvasProps {
   showMesh: boolean;
   onShowMeshChange: (v: boolean) => void;
   csfm: CsfmSummary | null;
+  stm: StmModel | null;
   tool: Tool;
   onToolChange: (t: Tool) => void;
   sel: Selection;
@@ -93,6 +94,15 @@ const LEGENDS: Record<ViewMode, { title: string; items: [string, string][] }> = 
     title: "CSFM linear (estimativa)",
     items: [["#fca5a5", "zona tracionada"], ["#7f1d1d", "direção sugerida do tirante"]],
   },
+  stm: {
+    title: "Modelo de Bielas e Tirantes (STM)",
+    items: [
+      ["#1d4ed8", "biela (compressão, tracejado)"],
+      ["#dc2626", "tirante (tração, T e As)"],
+      ["#16a34a", "nó CCC/CCT/CTT ≤ 100 %"],
+      ["#b91c1c", "nó/biela > 100 % ou ângulo"],
+    ],
+  },
   nlconc: {
     title: "Nível 2 · Deformação ε3/εcu",
     items: [[GRAD_COMP, "ε3 / εcu: 0 → 100 %"], ["#7f1d1d", "esmagado (≥ εcu)"], ["dash", "janela de esmagamento"], [GRAD_BAR, "barra: 0 → 100 % fy"]],
@@ -126,7 +136,7 @@ const HINTS: Record<Tool, string> = {
 export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasProps>((props, ref) => {
   const {
     scene, onSceneChange, frame, frameIndex, frameCount, onFrameIndexChange,
-    viewMode, onViewModeChange, showMesh, onShowMeshChange, csfm,
+    viewMode, onViewModeChange, showMesh, onShowMeshChange, csfm, stm,
     tool, onToolChange, sel, onSelChange, geomLocked, onGeomLockedChange,
     supportKindDefault, rebarCfg, hoverBarId, onHoverBarChange, nextId, onToast,
     errors, warnings,
@@ -160,11 +170,11 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     renderViewport({
-      ctx, width: w, height: h, view: viewRef.current, scene, frame, viewMode, showMesh, csfm,
+      ctx, width: w, height: h, view: viewRef.current, scene, frame, viewMode, showMesh, csfm, stm,
       sel, hoverBarId, tool, hoverGrip: hoverGripRef.current, rebarPreview: rebarPreviewRef.current,
       rebarCfg, dragOverlay: dragRef.current, polyDraft: polyDraftRef.current, hoverWorld: hoverWorldRef.current,
     });
-  }, [scene, frame, viewMode, showMesh, csfm, sel, hoverBarId, tool, rebarCfg]);
+  }, [scene, frame, viewMode, showMesh, csfm, stm, sel, hoverBarId, tool, rebarCfg]);
 
   const fitView = useCallback(() => {
     const cv = cvRef.current;
@@ -424,7 +434,7 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     }
 
     if (tool === "select") {
-      const info = inspectHoverPoint(px, py, viewRef.current, scene, frame, viewMode);
+      const info = inspectHoverPoint(px, py, viewRef.current, scene, frame, viewMode, stm);
       if (info) {
         if (info.barId !== hoverBarId) onHoverBarChange(info.barId);
         setTooltip({ x: ev.clientX, y: ev.clientY, title: info.title, lines: info.lines });
@@ -606,6 +616,7 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
             </optgroup>
             <optgroup label="Otimização & Campo Elástico">
               <option value="topo">Topologia + trajetórias σ1/σ2</option>
+              <option value="stm">STM — Bielas, tirantes e nós</option>
               <option value="s1">Tração principal σ1</option>
               <option value="s2">Compressão principal σ2</option>
               <option value="def">Deformada ampliada</option>
