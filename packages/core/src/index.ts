@@ -11,3 +11,5 @@ export * from "./indices";
 export * from "./nonlinear";
 export * from "./codes";
 export * from "./rebar";
+export * from "./benchmarks";
+export * from "./templates";

@@ -8,5 +8,6 @@ src2/*.pdf
 # modelos/testes só para desenvolvimento interno
 *.local.*
 
-# PDFs licenciados (fib) e material de planejamento externo
+# PDFs licenciados (fib) e transcrições locais em markdown
 src-fib/*.pdf
+src/*_md/

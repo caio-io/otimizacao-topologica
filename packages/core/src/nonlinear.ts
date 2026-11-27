@@ -159,6 +159,31 @@ export interface NlFailure {
   bar: { label: string; at: { x: number; y: number } | null } | null;
 }
 
+/** ponto da curva carga × deslocamento (Nível 2) */
+export interface NlCurvePoint {
+  lambda: number;
+  /** resultante total aplicada λ·P0 [kN] */
+  load: number;
+  /** deslocamento equivalente sob as cargas (fRaw·u / P0) [m], positivo no sentido do carregamento */
+  disp: number;
+  /** maior módulo de deslocamento nodal [m] */
+  maxDisp: number;
+}
+
+/** resumo das taxas de utilização no passo/estado último (frações; ≥ 1,0 = limite atingido) */
+export interface NlUtilization {
+  /** max(|σ3|) / fc no concreto */
+  concreteStress: number;
+  /** ε_crush / εcu no concreto */
+  concreteCrush: number;
+  /** max(|σs| / fy) nas barras */
+  steelStress: number;
+  /** max(|εs| / εu) nas barras */
+  steelStrain: number;
+  /** maior compressão principal |σ3| no concreto [kN/m²] */
+  maxCompStress: number;
+}
+
 export interface NlResult {
   /** fator de carga último (múltiplo da carga de referência do Problem) */
   lambda: number;
@@ -170,6 +195,10 @@ export interface NlResult {
   /** equilíbrio global: |ΣR + ΣF| / |ΣF| em x e y */
   equilibrium: { x: number; y: number };
   steps: { lambda: number; its: number; rel: number }[];
+  /** curva carga × deslocamento para todos os passos convergidos (inclui a origem) */
+  curve: NlCurvePoint[];
+  /** taxas de utilização no último estado em equilíbrio */
+  utilization: NlUtilization;
   /** reação por GDL [kN] (R = fint − λ·fRaw nos GDLs restringidos; zero nos demais) */
   reaction: Float64Array;
   /** forças axiais [kN] por elemento de barra no estado último, na ordem das barras */
@@ -178,6 +207,8 @@ export interface NlResult {
   epsComp: Float64Array;
   /** deformação principal de tração média por elemento (> 0 ⇒ concreto fissurado) */
   epsTens: Float64Array;
+  /** direção da fissura por elemento [rad, y para cima], perpendicular à tração principal ε1 */
+  crackTheta: Float64Array;
   /** pontos de amostra das barras com a força axial [kN] (para desenho) */
   barSamples: { x: number; y: number; N: number }[][];
   /** deformação de compressão usada no critério de esmagamento (média na janela, se `crushLength`) */
@@ -199,10 +230,12 @@ export interface NlResult {
 /** estado de um passo de carga convergido (só emitido com `stepwise: true`) */
 export interface NlStep {
   lambda: number; its: number;
-  u: Float64Array; epsComp: Float64Array; epsTens: Float64Array;
+  u: Float64Array; epsComp: Float64Array; epsTens: Float64Array; crackTheta: Float64Array;
   barSamples: { x: number; y: number; N: number }[][];
   maxEpsC: number; crushStrain: number; notes: string[]; stress: Float64Array;
   crush: CrushInfo;
+  curvePoint: NlCurvePoint;
+  utilization: NlUtilization;
 }
 
 interface BarEl { a: number; b: number; cx: number; cy: number; bar: number }
@@ -484,9 +517,10 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
   }
 
-  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[]; singular: boolean }
+  interface Asm { L: Float64Array; fint: Float64Array; maxEpsC: number; epsEl: Float64Array; epsT: Float64Array; crackTh: Float64Array; sEl: Float64Array; barForces: Float64Array[]; barEps: number[]; yielded: boolean[]; singular: boolean }
 
   let maxEpsC = 0, epsEl = new Float64Array(0), epsT = new Float64Array(0), sEl = new Float64Array(0);
+  let crCos = new Float64Array(0), crSin = new Float64Array(0);
   const useQM6 = (opt.element ?? "q4") === "qm6";
   const alpha = new Float64Array(nelx * nely * 4);
   const Dm = new Float64Array(9);
@@ -508,8 +542,13 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
   const material = (ex: number, ey: number, gm: number, e: number, book: boolean) => {
     const avg = 0.5 * (ex + ey), rad = Math.hypot(0.5 * (ex - ey), 0.5 * gm);
     const e1 = avg + rad, e3 = avg - rad;
-    if (book && e1 > 0) epsT[e] += e1 / 4;
     const th = 0.5 * Math.atan2(gm, ex - ey), cs = Math.cos(th), sn = Math.sin(th);
+    if (book && e1 > 0) {
+      epsT[e] += e1 / 4;
+      // fissura é perpendicular à direção principal de tração (θ_cr = θ + π/2 ⇒ cos(2θ_cr) = -cos(2θ), sin(2θ_cr) = -sin(2θ))
+      crCos[e] += e1 * (sn * sn - cs * cs);
+      crSin[e] += e1 * (-2 * sn * cs);
+    }
     const fresh = rad < 1e-14 && Math.abs(avg) < 1e-14;
     let s1 = 0, s3 = 0, E1 = Ecr, E3 = Ecr, kk = 1;
     if (fresh) { E1 = E3 = E0; }
@@ -541,6 +580,7 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     const fint = new Float64Array(ndof);
     let singular = false;
     maxEpsC = 0; epsEl = new Float64Array(nelx * nely); epsT = new Float64Array(nelx * nely); sEl = new Float64Array(3 * nelx * nely);
+    crCos = new Float64Array(nelx * nely); crSin = new Float64Array(nelx * nely);
     const ue = new Float64Array(8), Ke = new Float64Array(64), B = new Float64Array(24), DB = new Float64Array(24), fe = new Float64Array(8);
     for (let e = 0; e < nelx * nely; e++) {
       if (p.mask[e] === 0) continue;
@@ -698,7 +738,9 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
       }
     }
     perBar.forEach((arr, k) => { barForces[k] = Float64Array.from(arr); });
-    return { L, fint, maxEpsC, epsEl, epsT, sEl, barForces, barEps, yielded, singular };
+    const crackTh = new Float64Array(nelx * nely);
+    for (let e = 0; e < nelx * nely; e++) if (epsT[e] > 0) crackTh[e] = 0.5 * Math.atan2(crSin[e], crCos[e]);
+    return { L, fint, maxEpsC, epsEl, epsT, crackTh, sEl, barForces, barEps, yielded, singular };
   };
 
   // ---- equilíbrio em um nível de carga: correção pelo resíduo com rigidez secante
@@ -756,8 +798,47 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     return { ok: false, u, asm, rel, its };
   };
 
+  // ---- helpers de curva P–δ e utilização
+  let P0x = 0, P0y = 0;
+  for (let d = 0; d < ndof; d += 2) { P0x += m.fRaw[d]; P0y += m.fRaw[d + 1]; }
+  const P0 = Math.hypot(P0x, P0y);
+  const curvePointOf = (lam: number, u: Float64Array): NlCurvePoint => {
+    let work = 0, maxD = 0;
+    for (let d = 0; d < ndof; d += 2) {
+      work += m.fRaw[d] * u[d] + m.fRaw[d + 1] * u[d + 1];
+      const dm = Math.hypot(u[d], u[d + 1]);
+      if (dm > maxD) maxD = dm;
+    }
+    return { lambda: lam, load: lam * P0, disp: P0 > 1e-12 ? work / P0 : maxD, maxDisp: maxD };
+  };
+  const utilOf = (a: Asm): NlUtilization => {
+    let maxS3 = 0;
+    for (let e = 0; e < nelx * nely; e++) {
+      if (cmask[e] === 0) continue;
+      const sx = a.sEl[3 * e], sy = a.sEl[3 * e + 1], tx = a.sEl[3 * e + 2];
+      const s3 = 0.5 * (sx + sy) - Math.hypot(0.5 * (sx - sy), tx);
+      if (-s3 > maxS3) maxS3 = -s3;
+    }
+    let stStress = 0, stStrain = 0;
+    for (let k = 0; k < bars.length; k++) {
+      const b = bars[k];
+      const nMax = a.barForces[k].reduce((acc, v) => Math.max(acc, Math.abs(v)), 0);
+      stStress = Math.max(stStress, b.area > 0 && b.steel.fy > 0 ? (nMax / b.area) / b.steel.fy : 0);
+      stStrain = Math.max(stStrain, b.steel.epsU > 0 ? a.barEps[k] / b.steel.epsU : 0);
+    }
+    const cStrain = crushOf(a);
+    return {
+      concreteStress: c.fc > 0 ? maxS3 / c.fc : 0,
+      concreteCrush: c.epsu > 0 ? cStrain / c.epsu : 0,
+      steelStress: stStress,
+      steelStrain: stStrain,
+      maxCompStress: maxS3,
+    };
+  };
+
   // ---- passo de carga com bissecção até o limite
   const steps: NlResult["steps"] = [];
+  const curve: NlCurvePoint[] = [{ lambda: 0, load: 0, disp: 0, maxDisp: 0 }];
   let lamGood = 0, uGood = new Float64Array(ndof), asmGood = assemble(uGood);
   let dl = opt.dLambda ?? 0.1;
   const lamMax = opt.lambdaMax ?? 1e4;
@@ -789,9 +870,11 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }
     lamGood = lamTry; uGood = eq.u; asmGood = eq.asm;
     steps.push({ lambda: lamGood, its: eq.its, rel: eq.rel });
+    const cp = curvePointOf(lamGood, uGood);
+    curve.push(cp);
     if (!firstPlateau && asmGood.maxEpsC >= 0.95 * c.eps0) firstPlateau = { lambda: lamGood, step: steps.length };
     for (let k = 0; k < bars.length; k++) if (yieldLam[k] === null && asmGood.yielded[k]) yieldLam[k] = lamGood;
-    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice(), crush: crushDetail(asmGood.epsEl) };
+    if (opt.stepwise) yield { lambda: lamGood, its: eq.its, u: uGood.slice(), epsComp: asmGood.epsEl.slice(), epsTens: asmGood.epsT.slice(), crackTheta: asmGood.crackTh.slice(), barSamples: samplesOf(asmGood), maxEpsC: asmGood.maxEpsC, crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl.slice(), crush: crushDetail(asmGood.epsEl), curvePoint: cp, utilization: utilOf(asmGood) };
     if (lamGood >= lamMax) { mode = "lambdaMax"; break; }
     // o passo volta a crescer mesmo depois de uma falha (antes ficava preso no menor valor e esgotava o limite de passos)
     if (eq.its <= (everFailed ? 3 : 6)) dl = Math.min(dl * (everFailed ? 1.25 : 1.5), opt.dLambda ?? 0.1);
@@ -830,8 +913,8 @@ export function* solveNonlinearSteps(p: Problem, opt: NlOptions): Generator<NlSt
     }),
     maxCompStrain: asmGood.maxEpsC,
     equilibrium: { x: eqx, y: eqy },
-    steps, barForces: asmGood.barForces, reaction,
-    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl,
+    steps, curve, utilization: utilOf(asmGood), barForces: asmGood.barForces, reaction,
+    epsComp: asmGood.epsEl, epsTens: asmGood.epsT, crackTheta: asmGood.crackTh, barSamples: samplesOf(asmGood), crushStrain: crushOf(asmGood), notes, stress: asmGood.sEl,
     crush: crushDetail(asmGood.epsEl), firstPlateau,
     failure: {
       mode, lambda: lamGood,

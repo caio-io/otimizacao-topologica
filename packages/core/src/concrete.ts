@@ -26,3 +26,39 @@ export function strutWidth(F: number, t: number, fck: number, k: number = K_STRU
  * a largura mínima medida nas cristas do mapa de distância ≈ 1,1–1,3·rmin·h, logo rmin ≈ a/h é conservador.
  */
 export const filterRadiusForWidth = (a: number, h: number) => a / h;
+
+/**
+ * Limita o raio do filtro automático pela menor largura sólida característica da peça (ex.: fuste de pilar com consolo),
+ * evitando que `2·rmin` exceda ~30 % do membro mais estreito e impeça a convergência do BESO.
+ */
+export function cappedAutoFilterRadius(
+  a: number,
+  h: number,
+  mask?: Uint8Array,
+  nelx?: number,
+  nely?: number,
+): number {
+  const raw = Math.max(1.5, Math.ceil(filterRadiusForWidth(a, h) * 2) / 2);
+  let maxR = 12;
+  if (mask && nelx && nely) {
+    const rowCounts: number[] = [];
+    for (let j = 0; j < nely; j++) {
+      let c = 0;
+      for (let i = 0; i < nelx; i++) if (mask[i * nely + j] !== 0) c++;
+      if (c > 0) rowCounts.push(c);
+    }
+    const colCounts: number[] = [];
+    for (let i = 0; i < nelx; i++) {
+      let c = 0;
+      for (let j = 0; j < nely; j++) if (mask[i * nely + j] !== 0) c++;
+      if (c > 0) colCounts.push(c);
+    }
+    rowCounts.sort((x, y) => x - y);
+    colCounts.sort((x, y) => x - y);
+    const medRow = rowCounts.length ? rowCounts[Math.floor(rowCounts.length * 0.25)] : nelx;
+    const medCol = colCounts.length ? colCounts[Math.floor(colCounts.length * 0.25)] : nely;
+    const minSpan = Math.min(medRow, medCol);
+    maxR = Math.min(12, Math.max(2.5, Math.floor(minSpan * 0.14 * 2) / 2));
+  }
+  return Math.min(maxR, raw);
+}
