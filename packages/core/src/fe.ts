@@ -195,6 +195,7 @@ export function solvePCG(
     matvec(pv, Ap);
     let pAp = 0;
     for (let d = 0; d < ndof; d++) pAp += pv[d] * Ap[d];
+    if (!(pAp > 1e-30) || !(Math.abs(rz) > 1e-30)) break;
     const alpha = rz / pAp;
     let rzNew = 0;
     for (let d = 0; d < ndof; d++) {
@@ -216,11 +217,23 @@ export function solvePCG(
  * robusto ao contraste 1e-9 entre sólido e vazio (onde o PCG-Jacobi precisa de milhares
  * de iterações).
  */
-export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float64Array): boolean {
+export interface BandedWorkspace {
+  L?: Float64Array;
+  y?: Float64Array;
+}
+
+export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float64Array, work?: BandedWorkspace): boolean {
   const { ndof, nel, edof, KE, isFixed, f } = m;
   const bw = 2 * nely + 5;
   const w = bw + 1;
-  const L = new Float64Array(ndof * w); // L[i*w + (bw-(i-j))] guarda A[i][j], j<=i
+  const needed = ndof * w;
+  let L = work?.L;
+  if (!L || L.length < needed) {
+    L = new Float64Array(needed);
+    if (work) work.L = L;
+  } else {
+    L.fill(0, 0, needed);
+  }
   for (let e = 0; e < nel; e++) {
     const E = Ee[e], b = e * 8;
     for (let a = 0; a < 8; a++) {
@@ -233,7 +246,7 @@ export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float
       }
     }
   }
-  return solveBandedAssembled(L, ndof, bw, isFixed, f, u);
+  return solveBandedAssembled(L, ndof, bw, isFixed, f, u, work);
 }
 
 /**
@@ -242,7 +255,7 @@ export function solveBanded(m: FEModel, nely: number, Ee: Float64Array, u: Float
  * Retorna `true` se todos os pivôs forem positivos e finitos (> 1e-30); caso contrário, retorna `false` sem mascarar
  * singularidade ou perda de positividade definida.
  */
-export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, isFixed: Uint8Array, f: Float64Array, u: Float64Array): boolean {
+export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, isFixed: Uint8Array, f: Float64Array, u: Float64Array, work?: BandedWorkspace): boolean {
   const w = bw + 1;
   for (let i = 0; i < ndof; i++) if (isFixed[i]) L[i * w + bw] = 1;
   // fatoração L Lᵀ
@@ -260,7 +273,13 @@ export function solveBandedAssembled(L: Float64Array, ndof: number, bw: number, 
     }
   }
   // substituições
-  const y = new Float64Array(ndof);
+  let y = work?.y;
+  if (!y || y.length < ndof) {
+    y = new Float64Array(ndof);
+    if (work) work.y = y;
+  } else {
+    y.fill(0, 0, ndof);
+  }
   for (let i = 0; i < ndof; i++) {
     let s = isFixed[i] ? 0 : f[i];
     const bi = i * w + bw - i;

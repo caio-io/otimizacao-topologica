@@ -1,5 +1,5 @@
 import type { IterInfo, Problem, SimpOptions } from "./types";
-import { buildModel, solveBanded } from "./fe";
+import { buildModel, solveBanded, type BandedWorkspace } from "./fe";
 
 const EMIN = 1e-6;
 
@@ -22,6 +22,8 @@ export function* simp(p: Problem, opt: SimpOptions): Generator<IterInfo, IterInf
     else rho[e] = p.mask[e] === 2 ? 1 : 0;
   }
   const nAct = active.length;
+  if (nAct === 0) throw new Error("SIMP: domínio sem elementos ativos (mask === 1).");
+  if (!(opt.rmin > 0)) throw new Error("SIMP: raio do filtro (rmin) deve ser positivo.");
 
   // vizinhança do filtro
   const R = Math.ceil(opt.rmin) - 1;
@@ -36,11 +38,15 @@ export function* simp(p: Problem, opt: SimpOptions): Generator<IterInfo, IterInf
   const u = new Float64Array(m.ndof);
   const dc = new Float64Array(nel), dcf = new Float64Array(nel);
   const ue = new Float64Array(8);
+  const rhoNew = new Float64Array(rho);
+  const work: BandedWorkspace = {};
   let last: IterInfo = { iter: 0, compliance: 0, volume: opt.volfrac, change: 1, rho };
 
   for (let iter = 1; iter <= opt.maxIter; iter++) {
     for (let e = 0; e < nel; e++) Ee[e] = EMIN + (1 - EMIN) * Math.pow(rho[e], opt.penal);
-    solveBanded(m, p.nely, Ee, u);
+    if (!solveBanded(m, p.nely, Ee, u, work)) {
+      throw new Error("SIMP: matriz de rigidez singular ou mal condicionada (verifique apoios e conectividade).");
+    }
 
     let c = 0;
     for (let e = 0; e < nel; e++) {
@@ -72,17 +78,20 @@ export function* simp(p: Problem, opt: SimpOptions): Generator<IterInfo, IterInf
 
     // OC com bisseção no multiplicador de Lagrange
     let l1 = 0, l2 = 1e9;
-    const rhoNew = new Float64Array(rho);
-    while ((l2 - l1) / (l1 + l2) > 1e-4) {
-      const mid = 0.5 * (l1 + l2);
+    const evalVol = (lam: number): number => {
       let vol = 0;
       for (const e of active) {
-        const be = Math.sqrt(Math.max(-dcf[e], 1e-30) / mid);
+        const be = Math.sqrt(Math.max(-dcf[e], 1e-30) / lam);
         const x = rho[e] * be;
         rhoNew[e] = Math.max(1e-3, Math.max(rho[e] - move, Math.min(1, Math.min(rho[e] + move, x))));
         vol += rhoNew[e];
       }
-      if (vol / nAct > opt.volfrac) l1 = mid; else l2 = mid;
+      return vol;
+    };
+    while (l2 < 1e30 && evalVol(l2) / nAct > opt.volfrac) l2 *= 2;
+    while ((l2 - l1) / (l1 + l2) > 1e-4) {
+      const mid = 0.5 * (l1 + l2);
+      if (evalVol(mid) / nAct > opt.volfrac) l1 = mid; else l2 = mid;
     }
     let change = 0;
     for (const e of active) change = Math.max(change, Math.abs(rhoNew[e] - rho[e]));
@@ -111,6 +120,8 @@ export function solveDisplacements(p: Problem, rho: Float64Array, penal: number)
   const Ee = new Float64Array(rho.length);
   for (let e = 0; e < rho.length; e++) Ee[e] = EMIN + (1 - EMIN) * Math.pow(rho[e], penal);
   const u = new Float64Array(m.ndof);
-  solveBanded(m, p.nely, Ee, u);
+  if (!solveBanded(m, p.nely, Ee, u)) {
+    throw new Error("solveDisplacements: matriz de rigidez singular ou mal condicionada.");
+  }
   return u;
 }
