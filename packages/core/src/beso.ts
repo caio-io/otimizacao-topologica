@@ -94,7 +94,9 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
     // rígido numéricos e picos espúrios de flexibilidade. Trata-o como vazio na análise (e ele sai na seleção).
     reachable(x, reach);
     for (let e = 0; e < nel; e++) Ee[e] = p.mask[e] === 0 || !reach[e] ? 1e-9 : Math.pow(Math.max(x[e], XMIN), opt.penal);
-    solveBanded(m, p.nely, Ee, u);
+    if (!solveBanded(m, p.nely, Ee, u)) {
+      throw new Error("BESO: matriz de rigidez singular ou mal condicionada (verifique apoios e conectividade).");
+    }
 
     let c = 0;
     for (let e = 0; e < nel; e++) {
@@ -193,7 +195,8 @@ export function* beso(p: Problem, opt: BesoOptions): Generator<IterInfo, IterInf
       const n = hist.length;
       const a = hist.slice(n - 5).reduce((s, t) => s + t, 0) / 5;
       const b = hist.slice(n - 10, n - 5).reduce((s, t) => s + t, 0) / 5;
-      if (Math.abs(a - b) / a < opt.tol) return finalize(last);
+      const relDiff = a <= 1e-30 ? Math.abs(a - b) : Math.abs(a - b) / a;
+      if (relDiff < opt.tol) return finalize(last);
     }
     yield last;
   }
