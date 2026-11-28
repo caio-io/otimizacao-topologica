@@ -138,3 +138,205 @@ export function generateStirrupGroup(p: StirrupGroupParams): BarSpec | null {
     fy: st.fy, ft: st.ft, Es: st.Es, epsU: st.epsU,
   };
 }
+
+export interface WalkingColumnTemplateParams {
+  /** Nome do edifício / identificação do projeto (usado no rótulo) */
+  buildingName?: string;
+  /** Pé-direito de cada pavimento [m] (modelo de 3 pavimentos: total = 3 × storyH) */
+  storyH: number;
+  /** Coordenada X do eixo do pilar superior (Pav. 3) [m] */
+  topAxisX: number;
+  /** Excentricidade horizontal até o eixo do pilar inferior (Pav. 1) [m]; >0 desloca para a direita */
+  eccentricity: number;
+  /** Largura do pilar superior no plano [m] */
+  topColW: number;
+  /** Largura do pilar inferior no plano [m] (padrão = topColW) */
+  botColW?: number;
+  /** Espessura fora do plano dos pilares [m] */
+  t: number;
+  /** Espessura (altura vertical) da laje do diafragma [m] */
+  slabH: number;
+  /** Resistência característica do concreto fck [MPa] */
+  fck: number;
+  /** Carga vertical de compressão no topo do pilar superior [kN] (valor positivo) */
+  loadTopKN: number;
+  /** Força horizontal opcional no topo do pilar superior [kN] (+ para a direita; padrão 0) */
+  horizTopKN?: number;
+  /** Altura do toco do pilar superior (acima da Laje 2) e inferior (abaixo da Laje 1) [m] (padrão Saint-Venant ≈ 1,25·b) */
+  stubH?: number;
+  /** Tamanho do elemento finito [m] (opcional: calculado automaticamente respeitando MAX_ELEMENTS) */
+  h?: number;
+  /** Gerar armadura inicial paramétrica para análise não linear Nível 2 (padrão true) */
+  includeRebar?: boolean;
+}
+
+export interface WalkingColumnSummary {
+  /** Coordenadas horizontais [m] do pilar superior, inferior e intermediário (autocomplete) */
+  xTopL: number; xTopR: number;
+  xBotAxis: number; xBotL: number; xBotR: number;
+  xMidL: number; xMidR: number;
+  midColW: number;
+  midAxisX: number;
+  /** Altura dos tocos superior/inferior [m], altura total modelada [m] e braço entre eixos das lajes [m] */
+  stubH: number;
+  totalH: number;
+  zDiaf: number;
+  /** Razão de excentricidade |e|/H e ângulo aproximado da biela diagonal [°] */
+  eccRatio: number;
+  strutAngleDeg: number;
+  /** Força horizontal estimada de equilíbrio em cada diafragma (H ≈ N·|e|/zDiaf) [kN] */
+  estimatedThrustKN: number;
+  /** Armadura adicional estimada na laje (CA-50, fyd = 434,8 MPa) a somar à flexão [cm²] */
+  estimatedDiafAsCm2: number;
+  /** Taxa de força normal adimensional no pilar superior ν = N / (Ac · fcd) */
+  axialRatioNu: number;
+  /** Tamanho de elemento finito adotado [m] */
+  meshH: number;
+}
+
+/** Calcula geometria (incluindo autocomplete do pilar intermediário envolvente) e indicadores do walking column de 3 pavimentos. */
+export function walkingColumnSummary(p: WalkingColumnTemplateParams): WalkingColumnSummary {
+  const storyH = Math.max(1.5, p.storyH);
+  const slabH = Math.min(Math.max(0.1, p.slabH), storyH * 0.4);
+  const topColW = Math.max(0.2, p.topColW);
+  const botColW = Math.max(0.2, p.botColW ?? topColW);
+  const xTopL = r4(p.topAxisX - topColW / 2);
+  const xTopR = r4(p.topAxisX + topColW / 2);
+  const xBotAxis = r4(p.topAxisX + p.eccentricity);
+  const xBotL = r4(xBotAxis - botColW / 2);
+  const xBotR = r4(xBotAxis + botColW / 2);
+  const xMidL = Math.min(xTopL, xBotL);
+  const xMidR = Math.max(xTopR, xBotR);
+  const midColW = r4(xMidR - xMidL);
+  const midAxisX = r4((xMidL + xMidR) / 2);
+  // Toco de regularização (Saint-Venant): não precisa modelar o pé-direito inteiro acima/abaixo da transição
+  const autoStub = Math.min(storyH, Math.max(0.75, 1.25 * Math.max(topColW, botColW)));
+  const stubH = r4(Math.min(storyH, Math.max(0.4, p.stubH ?? autoStub)));
+  const totalH = r4(2 * stubH + storyH + slabH);
+  const zDiaf = r4(storyH);
+  const absE = Math.abs(p.eccentricity);
+  const eccRatio = absE / storyH;
+  const strutAngleDeg = absE > 1e-6 ? (Math.atan2(storyH, absE) * 180) / Math.PI : 90;
+  const loadN = Math.abs(p.loadTopKN);
+  const estimatedThrustKN = (loadN * absE) / zDiaf;
+  const fydKPa = (STEEL_CLASSES.CA50.fy) * 1e3; // kN/m²
+  const estimatedDiafAsCm2 = (estimatedThrustKN / fydKPa) * 1e4;
+  const fcdKPa = (p.fck / 1.4) * 1e3; // NBR 6118: fcd = fck / 1.4
+  const axialRatioNu = loadN / Math.max(topColW * p.t * fcdKPa, 1e-6);
+
+  // Resolução automática respeitando MAX_ELEMENTS = 20000 com folga (alvo ≤ 14000 elementos no bounding box)
+  let meshH = p.h ?? 0.05;
+  if (p.h === undefined) {
+    const targetMax = 14000;
+    const minH = Math.sqrt((midColW * totalH) / targetMax);
+    const maxSlabH = Math.max(0.04, slabH / 2);
+    meshH = Math.max(0.04, Math.min(maxSlabH, 0.08));
+    if (minH > meshH) meshH = Math.ceil(minH * 100) / 100;
+  }
+  meshH = r4(Math.max(0.025, meshH));
+
+  return {
+    xTopL, xTopR, xBotAxis, xBotL, xBotR, xMidL, xMidR, midColW, midAxisX,
+    stubH, totalH, zDiaf, eccRatio, strutAngleDeg, estimatedThrustKN, estimatedDiafAsCm2, axialRatioNu, meshH,
+  };
+}
+
+/**
+ * Template paramétrico de Walking Column de 3 pavimentos:
+ * - Pavimento 1 (inferior): toco do pilar centrado em `topAxisX + eccentricity` (Saint-Venant)
+ * - Pavimento 2 (intermediário): pilar envolvente gerado por autocomplete cobrindo os dois pilares
+ * - Pavimento 3 (superior): toco do pilar centrado em `topAxisX` (Saint-Venant)
+ * - Diafragmas rígidos (`ux` fixo, `uy` livre) nos DOIS lados das Lajes 1 e 2 (`Diaf1E/D`, `Diaf2E/D`),
+ *   podendo o usuário clicar e excluir qualquer lado individualmente.
+ */
+export function templateWalkingColumn(p: WalkingColumnTemplateParams): Scene {
+  const sum = walkingColumnSummary(p);
+  const storyH = Math.max(1.5, p.storyH);
+  const slabH = Math.min(Math.max(0.1, p.slabH), storyH * 0.4);
+  const y1Bot = sum.stubH;
+  const y1Top = r4(y1Bot + slabH);
+  const y2Bot = r4(y1Bot + storyH);
+  const y2Top = r4(y2Bot + slabH);
+  const y3Top = sum.totalH;
+
+  const s = base(sum.meshH, Math.min(p.topColW, p.botColW ?? p.topColW));
+  s.t = p.t;
+  s.fck = p.fck;
+
+  // Polígono único CCW com vértices das faixas de laje em AMBOS os lados (xMidL e xMidR)
+  const pts: [number, number][] = [
+    [sum.xBotL, 0],
+    [sum.xBotR, 0],
+    [sum.xBotR, y1Bot],
+  ];
+  if (sum.xMidR > sum.xBotR + 1e-6) pts.push([sum.xMidR, y1Bot]);
+  pts.push([sum.xMidR, y1Top], [sum.xMidR, y2Bot], [sum.xMidR, y2Top]);
+  if (sum.xTopR < sum.xMidR - 1e-6) pts.push([sum.xTopR, y2Top]);
+  pts.push([sum.xTopR, y3Top], [sum.xTopL, y3Top], [sum.xTopL, y2Top]);
+  if (sum.xMidL < sum.xTopL - 1e-6) pts.push([sum.xMidL, y2Top]);
+  pts.push([sum.xMidL, y2Bot], [sum.xMidL, y1Top], [sum.xMidL, y1Bot]);
+  if (sum.xBotL > sum.xMidL + 1e-6) pts.push([sum.xBotL, y1Bot]);
+
+  s.shapes.push({ id: "S1", mode: "add", pts });
+
+  // Apoios: base do pilar inferior (fixo) + diafragmas rígidos nos DOIS lados das Lajes 1 e 2 (clicáveis/apagáveis)
+  s.supports.push({ id: "ApBase", x0: sum.xBotL, y0: 0, x1: sum.xBotR, y1: 0, ux: true, uy: true });
+  s.supports.push({ id: "Diaf1E", x0: sum.xMidL, y0: y1Bot, x1: sum.xMidL, y1: y1Top, ux: true, uy: false });
+  s.supports.push({ id: "Diaf1D", x0: sum.xMidR, y0: y1Bot, x1: sum.xMidR, y1: y1Top, ux: true, uy: false });
+  s.supports.push({ id: "Diaf2E", x0: sum.xMidL, y0: y2Bot, x1: sum.xMidL, y1: y2Top, ux: true, uy: false });
+  s.supports.push({ id: "Diaf2D", x0: sum.xMidR, y0: y2Bot, x1: sum.xMidR, y1: y2Top, ux: true, uy: false });
+
+  // Carregamento no topo do pilar superior
+  s.loads.push({
+    id: "P1",
+    x: sum.xTopL, y: y3Top,
+    x1: sum.xTopR, y1: y3Top,
+    fx: p.horizTopKN ?? 0,
+    fy: -Math.abs(p.loadTopKN),
+  });
+
+  if (p.includeRebar !== false) {
+    const cover = 0.04;
+    const ca50 = STEEL_CLASSES.CA50;
+    const mkBar = (id: string, label: string, areaCm2: number, path: [number, number][]): BarSpec => ({
+      id, label, steelClass: "CA50", areaCm2, fy: ca50.fy, ft: ca50.ft, Es: ca50.Es, epsU: ca50.epsU, path,
+    });
+    const colAs = Math.max(barAreaCm2(4, 16), r4(0.004 * p.topColW * p.t * 1e4)); // ≥ 0,4 % por face (0,8 % total)
+    const tieAs = Math.max(barAreaCm2(4, 16), r4(sum.estimatedDiafAsCm2 * 1.15));
+    const bars: BarSpec[] = [
+      // Longitudinais do pilar superior ancoradas até a Laje 1
+      mkBar("B1", "Long. Sup. Esq.", colAs, [[r4(sum.xTopL + cover), r4(y1Bot + cover)], [r4(sum.xTopL + cover), r4(y3Top - cover)]]),
+      mkBar("B2", "Long. Sup. Dir.", colAs, [[r4(sum.xTopR - cover), r4(y1Bot + cover)], [r4(sum.xTopR - cover), r4(y3Top - cover)]]),
+      // Longitudinais do pilar inferior ancoradas até a Laje 2
+      mkBar("B3", "Long. Inf. Esq.", colAs, [[r4(sum.xBotL + cover), cover], [r4(sum.xBotL + cover), r4(y2Top - cover)]]),
+      mkBar("B4", "Long. Inf. Dir.", colAs, [[r4(sum.xBotR - cover), cover], [r4(sum.xBotR - cover), r4(y2Top - cover)]]),
+      // Tirantes horizontais nos níveis das Lajes 1 e 2 (diafragmas)
+      mkBar("B5", "Tirante Diaf. 2 (Laje Sup.)", tieAs, [[r4(sum.xMidL + cover), r4(y2Top - slabH / 2)], [r4(sum.xMidR - cover), r4(y2Top - slabH / 2)]]),
+      mkBar("B6", "Tirante Diaf. 1 (Laje Inf.)", tieAs, [[r4(sum.xMidL + cover), r4(y1Top - slabH / 2)], [r4(sum.xMidR - cover), r4(y1Top - slabH / 2)]]),
+    ];
+
+    // Estribos horizontais na zona de transição (Pav. 2) e nos pilares superior/inferior
+    const stMid = generateStirrupGroup({
+      id: "B7", label: "Estribos Transição (2Ø10 c/15)",
+      x0: sum.xMidL, y0: y1Top, x1: sum.xMidR, y1: y2Bot,
+      orientation: "horizontal", cover, spacing: 0.15, legs: 2, diaMm: 10, steelClass: "CA50", scene: s,
+    });
+    const stTop = generateStirrupGroup({
+      id: "B8", label: "Estribos Pilar Sup. (2Ø8 c/20)",
+      x0: sum.xTopL, y0: y2Top, x1: sum.xTopR, y1: y3Top,
+      orientation: "horizontal", cover, spacing: 0.2, legs: 2, diaMm: 8, steelClass: "CA50", scene: s,
+    });
+    const stBot = generateStirrupGroup({
+      id: "B9", label: "Estribos Pilar Inf. (2Ø8 c/20)",
+      x0: sum.xBotL, y0: 0, x1: sum.xBotR, y1: y1Bot,
+      orientation: "horizontal", cover, spacing: 0.2, legs: 2, diaMm: 8, steelClass: "CA50", scene: s,
+    });
+    if (stMid) bars.push(stMid);
+    if (stTop) bars.push(stTop);
+    if (stBot) bars.push(stBot);
+    s.bars = bars;
+  }
+
+  s.nl = { values: "design", epsCu: 0.0035, crushLength: p.t, crushAuto: true, code: "NBR6118" };
+  return s;
+}

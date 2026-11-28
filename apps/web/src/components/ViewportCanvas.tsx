@@ -155,6 +155,9 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
   const cvRef = useRef<HTMLCanvasElement | null>(null);
   const viewRef = useRef<ViewportTransform>({ s: 100, ox: 80, oy: 400 });
   const fittedRef = useRef(false);
+  const lastSizeRef = useRef({ w: 0, h: 0 });
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
   const dragRef = useRef<null | { type: string; start: [number, number]; cur: [number, number]; orig?: any }>(null);
   const panRef = useRef<null | { x: number; y: number }>(null);
   const polyDraftRef = useRef<[number, number][]>([]);
@@ -199,23 +202,27 @@ export const ViewportCanvas = React.forwardRef<ViewportHandle, ViewportCanvasPro
     capturePng: () => cvRef.current?.toDataURL("image/png") ?? null,
   }), [fitView]);
 
+  const drawNowRef = useRef(drawNow);
+  drawNowRef.current = drawNow;
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    let lastH = 0;
     const ro = new ResizeObserver(() => {
       if (el.clientWidth > 50 && el.clientHeight > 50) {
-        if (!fittedRef.current || Math.abs(el.clientHeight - lastH) > 40) {
+        const dw = Math.abs(el.clientWidth - lastSizeRef.current.w);
+        const dh = Math.abs(el.clientHeight - lastSizeRef.current.h);
+        if (!fittedRef.current || dw > 60 || dh > 60) {
           fittedRef.current = true;
-          lastH = el.clientHeight;
-          viewRef.current = computeFitTransform(scene, el.clientWidth, el.clientHeight);
+          lastSizeRef.current = { w: el.clientWidth, h: el.clientHeight };
+          viewRef.current = computeFitTransform(sceneRef.current, el.clientWidth, el.clientHeight);
         }
       }
-      drawNow();
+      drawNowRef.current();
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [drawNow, scene]);
+  }, []);
 
   useEffect(() => { drawNow(); }, [drawNow]);
 

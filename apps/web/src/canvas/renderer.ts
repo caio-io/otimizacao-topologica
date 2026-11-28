@@ -332,6 +332,8 @@ function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Sc
   const bars = scene.bars ?? [];
   const tendons = scene.tendons ?? [];
   if (!bars.length && !tendons.length) return;
+  // Escala suave com o zoom: no zoom out as barras ficam finas e limpas sem virar borrões
+  const zScale = Math.min(1, Math.max(0.32, v.s / 160));
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -339,33 +341,36 @@ function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Sc
     const hl = hoverBarId === b.id;
     const mainPath = discretizeBarPath(b, scene.h);
     const allPaths = [mainPath, ...(b.extra ?? [])];
-    ctx.strokeStyle = hl ? "#2563eb" : frame?.nl ? "rgba(30,41,59,.45)" : "#991b1b";
-    ctx.lineWidth = hl ? 3.5 : frame?.nl ? 1.1 : Math.max(1.5, Math.min(3.8, Math.sqrt(b.areaCm2)));
+    const baseW = Math.max(1.2, Math.min(2.8, Math.sqrt(b.areaCm2) * 0.85)) * zScale;
+    ctx.strokeStyle = hl ? "#2563eb" : frame?.nl ? "rgba(30,41,59,.42)" : "#991b1b";
+    ctx.lineWidth = hl ? Math.max(2.2, 3.0 * zScale) : frame?.nl ? Math.max(0.75, 1.05 * zScale) : Math.max(0.85, baseW);
     for (const path of allPaths) {
       ctx.beginPath();
       path.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(v, x), worldToScreenY(v, y)) : ctx.moveTo(worldToScreenX(v, x), worldToScreenY(v, y))));
       ctx.stroke();
     }
-    // rótulo no maior segmento da primeira polilinha
+    // rótulo no maior segmento: só exibe em hover ou quando há zoom suficiente (evita poluição no zoom out)
     let bi = 0, bl = 0;
     for (let q = 0; q + 1 < b.path.length; q++) {
       const l = Math.hypot(b.path[q + 1][0] - b.path[q][0], b.path[q + 1][1] - b.path[q][1]);
       if (l > bl) { bl = l; bi = q; }
     }
-    if (b.path.length > 1) {
+    const segPx = bl * v.s;
+    if (b.path.length > 1 && (hl || (v.s >= 105 && segPx >= 52))) {
       const lx = worldToScreenX(v, (b.path[bi][0] + b.path[bi + 1][0]) / 2);
       const ly = worldToScreenY(v, (b.path[bi][1] + b.path[bi + 1][1]) / 2);
-      ctx.font = `${hl ? "700 " : "600 "}10px Inter, system-ui, sans-serif`;
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "rgba(255,255,255,.92)";
+      const fSize = hl ? 10 : Math.max(8, Math.min(9.5, 8.5 + (v.s - 105) * 0.01));
+      ctx.font = `${hl ? "700 " : "600 "}${fSize.toFixed(1)}px Inter, system-ui, sans-serif`;
+      ctx.lineWidth = 2.6;
+      ctx.strokeStyle = "rgba(255,255,255,.9)";
       ctx.strokeText(b.label, lx + 4, ly - 4);
-      ctx.fillStyle = hl ? "#1d4ed8" : "#7f1d1d";
+      ctx.fillStyle = hl ? "#1d4ed8" : "rgba(127,29,29,.88)";
       ctx.fillText(b.label, lx + 4, ly - 4);
     }
     const samples = frame?.nl?.barSamples[k];
     if (!samples) return;
     const Afy = b.areaCm2 * 1e-4 * b.fy * 1e3;
-    const rad = Math.max(1.8, Math.min(3.4, Math.sqrt(b.areaCm2)));
+    const rad = Math.max(1.1, Math.min(2.8, Math.sqrt(b.areaCm2) * 0.9 * zScale));
     for (const sp of samples) {
       const r = sp.N / (Afy || 1), a = Math.min(1, Math.abs(r));
       ctx.fillStyle = r >= 0
@@ -383,7 +388,7 @@ function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Sc
     if (pts.length < 2) continue;
     ctx.setLineDash([10, 4, 2, 4]);
     ctx.strokeStyle = "#7c3aed";
-    ctx.lineWidth = Math.max(2.2, Math.min(4.2, Math.sqrt(td.areaCm2) * 1.4));
+    ctx.lineWidth = Math.max(1.4, Math.min(3.4, Math.sqrt(td.areaCm2) * 1.2 * zScale));
     ctx.beginPath();
     pts.forEach(([x, y], i) => (i ? ctx.lineTo(worldToScreenX(v, x), worldToScreenY(v, y)) : ctx.moveTo(worldToScreenX(v, x), worldToScreenY(v, y))));
     ctx.stroke();
@@ -391,61 +396,102 @@ function drawBars(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Sc
     // Ancoragens nas extremidades
     ctx.fillStyle = "#5b21b6";
     for (const endPt of [pts[0], pts[pts.length - 1]]) {
-      ctx.fillRect(worldToScreenX(v, endPt[0]) - 4, worldToScreenY(v, endPt[1]) - 4, 8, 8);
+      ctx.fillRect(worldToScreenX(v, endPt[0]) - 3.5, worldToScreenY(v, endPt[1]) - 3.5, 7, 7);
     }
-    const mid = pts[Math.floor(pts.length / 2)];
-    const lx = worldToScreenX(v, mid[0]), ly = worldToScreenY(v, mid[1]);
-    const lbl = `${td.label} (P0=${td.P0.toFixed(0)} kN · PROVISÓRIO)`;
-    ctx.font = "700 10px Inter, system-ui, sans-serif";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(255,255,255,.92)";
-    ctx.strokeText(lbl, lx + 6, ly - 6);
-    ctx.fillStyle = "#6d28d9";
-    ctx.fillText(lbl, lx + 6, ly - 6);
+    if (v.s >= 90) {
+      const mid = pts[Math.floor(pts.length / 2)];
+      const lx = worldToScreenX(v, mid[0]), ly = worldToScreenY(v, mid[1]);
+      const lbl = `${td.label} (P0=${td.P0.toFixed(0)} kN · PROVISÓRIO)`;
+      ctx.font = "700 9.5px Inter, system-ui, sans-serif";
+      ctx.lineWidth = 2.6;
+      ctx.strokeStyle = "rgba(255,255,255,.92)";
+      ctx.strokeText(lbl, lx + 6, ly - 6);
+      ctx.fillStyle = "#6d28d9";
+      ctx.fillText(lbl, lx + 6, ly - 6);
+    }
   }
   ctx.restore();
 }
 
 function drawLoad(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene: Scene, l: LoadSpec, selected: boolean) {
   ctx.save();
-  ctx.strokeStyle = selected ? "#2563eb" : "#ea580c";
-  ctx.fillStyle = ctx.strokeStyle;
+  const mainCol = selected ? "#2563eb" : "#d9460f";
+  const fillTop = selected ? "rgba(37, 99, 235, 0.24)" : "rgba(234, 88, 12, 0.24)";
+  const fillBot = selected ? "rgba(37, 99, 235, 0.05)" : "rgba(234, 88, 12, 0.05)";
+  ctx.strokeStyle = mainCol;
+  ctx.fillStyle = mainCol;
   if (isLineLoad(l)) {
     const F = Math.hypot(l.fx, l.fy) || 1, ux = l.fx / F, uy = l.fy / F;
     const x0 = worldToScreenX(v, l.x), y0 = worldToScreenY(v, l.y);
     const x1 = worldToScreenX(v, l.x1), y1 = worldToScreenY(v, l.y1);
-    const len = Math.hypot(x1 - x0, y1 - y0), A = 36;
-    ctx.lineWidth = selected ? 2.8 : 2;
-    const n = Math.max(2, Math.round(len / 24));
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    // Estilo SCIA: pente de ordenadas preenchido com gradiente translúcido + setas finas + etiqueta em pílula
+    const A = Math.max(24, Math.min(44, len * 0.55 + 14));
     const ox = -ux * A, oy = uy * A;
+    const grad = ctx.createLinearGradient((x0 + x1) / 2 + ox, (y0 + y1) / 2 + oy, (x0 + x1) / 2, (y0 + y1) / 2);
+    grad.addColorStop(0, fillTop);
+    grad.addColorStop(1, fillBot);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + ox, y0 + oy);
+    ctx.lineTo(x1 + ox, y1 + oy);
+    ctx.lineTo(x1, y1);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Linha de topo do diagrama SCIA
+    ctx.strokeStyle = mainCol;
+    ctx.lineWidth = selected ? 2.4 : 1.8;
     ctx.beginPath(); ctx.moveTo(x0 + ox, y0 + oy); ctx.lineTo(x1 + ox, y1 + oy); ctx.stroke();
+
+    // Pente de setas paralelas
+    const n = Math.max(3, Math.min(14, Math.round(len / 14)));
+    ctx.lineWidth = selected ? 1.5 : 1.15;
+    ctx.fillStyle = mainCol;
     for (let k = 0; k <= n; k++) {
       const bx = x0 + ((x1 - x0) * k) / n, by = y0 + ((y1 - y0) * k) / n;
       ctx.beginPath(); ctx.moveTo(bx + ox, by + oy); ctx.lineTo(bx, by); ctx.stroke();
-      arrowHead(ctx, bx, by, Math.atan2(-oy, -ox), 8);
+      arrowHead(ctx, bx, by, Math.atan2(-oy, -ox), 6.2);
     }
-    ctx.font = "600 11px Inter, system-ui, sans-serif";
-    ctx.fillStyle = "#1e293b";
-    ctx.fillText(
-      `${l.id}: ${lineLoadIntensity(l).toFixed(1)} kN/m (Σ ${l.fx ? `Fx=${l.fx} ` : ""}${l.fy ? `Fy=${l.fy} ` : ""}kN)`,
-      (x0 + x1) / 2 - 58,
-      (y0 + y1) / 2 + oy - 7,
-    );
+
+    // Etiqueta limpa estilo SCIA (pílula branca centralizada)
+    const compact = v.s < 85;
+    const resTxt = l.fx && l.fy
+      ? `Fx=${l.fx} · Fy=${l.fy} kN`
+      : l.fy
+        ? `${Math.abs(l.fy).toFixed(0)} kN`
+        : `${l.fx.toFixed(0)} kN`;
+    const lbl = compact ? `${l.id}: ${resTxt}` : `${l.id}: ${resTxt} (${lineLoadIntensity(l).toFixed(0)} kN/m)`;
+    const fSize = compact ? 9.5 : 10.5;
+    ctx.font = `600 ${fSize}px Inter, system-ui, sans-serif`;
+    const tw = ctx.measureText(lbl).width;
+    const mx = (x0 + x1) / 2 + ox, my = (y0 + y1) / 2 + oy - 8;
+    ctx.fillStyle = "rgba(255,255,255,.92)";
+    ctx.strokeStyle = selected ? "#93c5fd" : "rgba(234, 88, 12, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(mx - tw / 2 - 5, my - fSize - 2, tw + 10, fSize + 6, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#0f172a";
+    ctx.fillText(lbl, mx - tw / 2, my);
     ctx.restore();
     return;
   }
   const F = Math.hypot(l.fx, l.fy);
   const ux = F ? l.fx / F : 0, uy = F ? l.fy / F : -1;
-  const x = worldToScreenX(v, l.x), y = worldToScreenY(v, l.y), L = 52;
+  const x = worldToScreenX(v, l.x), y = worldToScreenY(v, l.y), L = 44;
   const tx = x - ux * L, ty = y + uy * L;
-  ctx.lineWidth = selected ? 3.2 : 2.4;
+  ctx.lineWidth = selected ? 2.8 : 2.1;
   if (scene.bearing > 0 && !l.point) {
     const hw = (scene.bearing * v.s) / 2;
     ctx.beginPath(); ctx.moveTo(x + uy * hw, y + ux * hw); ctx.lineTo(x - uy * hw, y - ux * hw); ctx.stroke();
   }
   ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
-  arrowHead(ctx, x, y, Math.atan2(y - ty, x - tx));
-  ctx.font = "600 11px Inter, system-ui, sans-serif";
+  arrowHead(ctx, x, y, Math.atan2(y - ty, x - tx), 8.5);
+  const fSize = v.s < 85 ? 9.5 : 10.5;
+  ctx.font = `600 ${fSize}px Inter, system-ui, sans-serif`;
   ctx.fillStyle = "#1e293b";
   ctx.fillText(`${l.id}: ${l.fx ? `Fx=${l.fx} ` : ""}${l.fy ? `Fy=${l.fy} ` : ""}kN`, tx + 6, ty - 5);
   ctx.restore();
@@ -456,9 +502,7 @@ function drawSupport(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene:
   const x0 = worldToScreenX(v, s.x0), y0 = worldToScreenY(v, s.y0);
   const x1 = worldToScreenX(v, s.x1), y1 = worldToScreenY(v, s.y1);
   const kind = supportKind(s);
-  const col = selected ? "#2563eb" : kind === "fixo" ? "#15803d" : "#7e22ce";
-  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = selected ? 3.8 : 2.8;
-  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  const isDiaf = s.id.startsWith("Diaf") || kind === "movel-y";
   const pts = scene.shapes.filter((q) => q.mode === "add").flatMap((q) => q.pts);
   const cx = pts.reduce((a, p) => a + worldToScreenX(v, p[0]), 0) / (pts.length || 1);
   const cy = pts.reduce((a, p) => a + worldToScreenY(v, p[1]), 0) / (pts.length || 1);
@@ -466,42 +510,106 @@ function drawSupport(ctx: CanvasRenderingContext2D, v: ViewportTransform, scene:
   let nx = len ? -dy / len : 0, ny = len ? dx / len : 1;
   if (len === 0 || ((x0 + x1) / 2 - cx) * nx + ((y0 + y1) / 2 - cy) * ny < 0) { nx = -nx; ny = -ny; }
   if (len === 0) { nx = 0; ny = 1; }
-  const n = Math.max(1, Math.round(len / 22));
+
+  if (isDiaf) {
+    // Representação suave e discreta para diafragma rígido (sem poluir o pilar; destaca em azul ao selecionar)
+    const col = selected ? "#2563eb" : "rgba(100, 116, 139, 0.52)";
+    const fillCol = selected ? "rgba(37, 99, 235, 0.14)" : "rgba(100, 116, 139, 0.08)";
+    const ext = Math.max(16, Math.min(34, v.s * 0.28));
+    // Faixa translúcida discreta da laje saindo para o lado externo
+    ctx.fillStyle = fillCol;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + nx * ext, y0 + ny * ext);
+    ctx.lineTo(x1 + nx * ext, y1 + ny * ext);
+    ctx.lineTo(x1, y1);
+    ctx.closePath();
+    ctx.fill();
+
+    // Linha na face de contato + traços finos de guia do diafragma
+    ctx.strokeStyle = col;
+    ctx.lineWidth = selected ? 2.4 : 1.5;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = selected ? 1.4 : 1.0;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0); ctx.lineTo(x0 + nx * ext, y0 + ny * ext);
+    ctx.moveTo(x1, y1); ctx.lineTo(x1 + nx * ext, y1 + ny * ext);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Pequeno rolete/triângulo discreto no centro da faixa
+    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    const tipx = mx + nx * 8, tipy = my + ny * 8, w = 4.2;
+    ctx.lineWidth = selected ? 1.5 : 1.1;
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    ctx.lineTo(tipx - ny * w, tipy + nx * w);
+    ctx.lineTo(tipx + ny * w, tipy - nx * w);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(mx + nx * 11, my + ny * 11, 1.9, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (selected || v.s >= 80) {
+      ctx.font = `${selected ? "700 " : "500 "}9px Inter, system-ui, sans-serif`;
+      ctx.fillStyle = selected ? "#1d4ed8" : "rgba(71, 85, 105, 0.72)";
+      ctx.textAlign = nx >= 0 ? "left" : "right";
+      ctx.fillText(s.id, mx + nx * (ext + 3), my + 3);
+      ctx.textAlign = "left";
+    }
+    ctx.restore();
+    return;
+  }
+
+  const col = selected ? "#2563eb" : kind === "fixo" ? "#15803d" : "#7e22ce";
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = selected ? 3.2 : 2.3;
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  const n = Math.max(1, Math.min(6, Math.round(len / 24)));
   for (let k = 0; k <= (len === 0 ? 0 : n); k++) {
-    const t = len === 0 ? 0 : k / n, bx = x0 + dx * t, by = y0 + dy * t, w = 6.5;
-    const tipx = bx + nx * 13, tipy = by + ny * 13;
+    const t = len === 0 ? 0 : k / n, bx = x0 + dx * t, by = y0 + dy * t, w = 5.5;
+    const tipx = bx + nx * 11, tipy = by + ny * 11;
     ctx.beginPath(); ctx.moveTo(bx, by);
     ctx.lineTo(tipx - ny * w, tipy + nx * w); ctx.lineTo(tipx + ny * w, tipy - nx * w); ctx.closePath();
     if (kind === "fixo") ctx.fill();
-    else { ctx.lineWidth = 1.5; ctx.stroke(); ctx.beginPath(); ctx.arc(bx + nx * 17, by + ny * 17, 2.8, 0, Math.PI * 2); ctx.stroke(); }
+    else { ctx.lineWidth = 1.4; ctx.stroke(); ctx.beginPath(); ctx.arc(bx + nx * 14.5, by + ny * 14.5, 2.4, 0, Math.PI * 2); ctx.stroke(); }
   }
-  ctx.font = "600 10.5px Inter, system-ui, sans-serif";
-  ctx.fillStyle = "#334155";
-  ctx.fillText(
-    `${s.id} (${kind === "fixo" ? "fixo" : kind === "movel-x" ? "móvel ↔" : "móvel ↕"})`,
-    (x0 + x1) / 2 + nx * 30 - 20,
-    (y0 + y1) / 2 + ny * 30 + (ny > 0 ? 8 : -2),
-  );
+  if (selected || v.s >= 70) {
+    const fSize = v.s < 95 ? 9 : 10;
+    ctx.font = `600 ${fSize}px Inter, system-ui, sans-serif`;
+    ctx.fillStyle = "#334155";
+    const lbl = v.s < 95 ? s.id : `${s.id} (${kind === "fixo" ? "fixo" : "móvel ↔"})`;
+    ctx.textAlign = "center";
+    ctx.fillText(lbl, (x0 + x1) / 2 + nx * 24, (y0 + y1) / 2 + ny * 24 + (ny > 0 ? 8 : -2));
+    ctx.textAlign = "left";
+  }
   ctx.restore();
 }
 
 function drawReactions(ctx: CanvasRenderingContext2D, v: ViewportTransform, m: FrameMsg) {
   ctx.save();
-  ctx.font = "700 11px Inter, system-ui, sans-serif";
+  const fSize = v.s < 85 ? 9 : 10;
+  ctx.font = `700 ${fSize}px Inter, system-ui, sans-serif`;
   for (const r of m.reactions) {
     const mag = Math.hypot(r.rx, r.ry);
-    if (mag < 1e-6) continue;
-    const x = worldToScreenX(v, r.x), y = worldToScreenY(v, r.y), L = 46;
+    if (mag < 0.1) continue;
+    const x = worldToScreenX(v, r.x), y = worldToScreenY(v, r.y), L = v.s < 85 ? 32 : 42;
     const ux = r.rx / mag, uy = r.ry / mag;
     const x0 = x - ux * L, y0 = y + uy * L;
-    ctx.strokeStyle = "#0f766e"; ctx.fillStyle = "#0f766e"; ctx.lineWidth = 2.6;
+    ctx.strokeStyle = "#0f766e"; ctx.fillStyle = "#0f766e"; ctx.lineWidth = 2.1;
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x, y); ctx.stroke();
-    arrowHead(ctx, x, y, Math.atan2(y - y0, x - x0), 10);
-    ctx.fillText(
-      `R(${r.id}): ${Math.abs(r.rx) > 0.05 ? `Rx=${r.rx.toFixed(1)} ` : ""}Ry=${r.ry.toFixed(1)} kN`,
-      x0 - 20,
-      y0 + (uy > 0 ? 13 : -6),
-    );
+    arrowHead(ctx, x, y, Math.atan2(y - y0, x - x0), 8.5);
+    const parts: string[] = [];
+    if (Math.abs(r.rx) >= 0.1) parts.push(`Rx=${r.rx.toFixed(0)}`);
+    if (Math.abs(r.ry) >= 0.1) parts.push(`Ry=${r.ry.toFixed(0)}`);
+    const lbl = `${r.id}: ${parts.join(" ")} kN`;
+    const tw = ctx.measureText(lbl).width;
+    const tx = x0 - tw / 2, ty = y0 + (uy > 0 ? 12 : -6);
+    ctx.fillStyle = "rgba(255,255,255,.88)";
+    ctx.fillRect(tx - 3, ty - fSize, tw + 6, fSize + 3);
+    ctx.fillStyle = "#0f766e";
+    ctx.fillText(lbl, tx, ty);
   }
   ctx.restore();
 }
